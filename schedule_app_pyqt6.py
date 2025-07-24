@@ -183,6 +183,12 @@ class SchedulerApp(QMainWindow):
         self.employees = []
         self.schedule = Schedule()
         self.max_per_day = {day: 20 for day in DAYS}
+
+        self.max_entries = {}
+        for i, day in enumerate(DAYS):
+            entry = QLineEdit(str(self.max_per_day[day]))
+            self.max_entries[day] = entry
+
         self.selected_employee_obj = None
         self.selected_row_widgets = None
         self.drag_data = {'label_widget': None, 'employee': None}
@@ -309,18 +315,18 @@ class SchedulerApp(QMainWindow):
 
     def _create_top_bar(self):
         layout = QHBoxLayout()
-        self.schedule_select = QComboBox()
-        self.schedule_select.addItems(["Select a schedule..."] + xlsx_files)
-        self.schedule_select.setMinimumWidth(300)
-        self.schedule_select.currentTextChanged.connect(self.load_schedule_from_selection)
-        
+
+        # Replace ComboBox with a Button to open Max Settings
+        self.max_settings_button = QPushButton("Target Settings")
+        self.max_settings_button.clicked.connect(self._open_max_settings_window)
+
         self.export_button = QPushButton("Export Schedule")
         self.export_button.clicked.connect(self.export_schedule)
 
         self.toggle_theme_button = QCheckBox("Dark Mode")
         self.toggle_theme_button.toggled.connect(self.toggle_theme)
 
-        layout.addWidget(self.schedule_select)
+        layout.addWidget(self.max_settings_button)
         layout.addStretch(1)
         layout.addWidget(self.toggle_theme_button)
         layout.addWidget(self.export_button)
@@ -337,16 +343,44 @@ class SchedulerApp(QMainWindow):
 
         # Add the final schedule frame container to the scroll area
         final_schedule_scroll_area.setWidget(self.final_schedule_frame_container)
-        layout.addWidget(QLabel("<h2>Final Schedule</h2>"))
         layout.addWidget(final_schedule_scroll_area, 1)  # Stretchable
 
         # Build the schedule preview inside the container
         self._build_schedule_preview(self.final_schedule_frame_container)
-
-        # Max per Day Settings
-        max_settings_frame = self._create_max_settings_frame()
-        layout.addWidget(max_settings_frame)
         return layout
+
+    def _open_max_settings_window(self):
+        """
+        Creates and shows a new, standalone window for managing max employees per day.
+        If the window already exists and is visible, it will be brought to the front.
+        """
+        # Prevent opening multiple instances of the settings window
+        if hasattr(self, 'max_settings_window') and self.max_settings_window.isVisible():
+            self.max_settings_window.raise_()  # Bring to front
+            self.max_settings_window.activateWindow()
+            return
+
+        # Create a new standalone QWidget for the Max Settings window
+        self.max_settings_window = QWidget()
+        self.max_settings_window.setWindowTitle("Target Employees Per Day")
+        self.max_settings_window.setGeometry(50, 50, 500, 50)
+
+        # The main layout for the new window
+        window_layout = QVBoxLayout(self.max_settings_window)
+
+        # Create the new info label and add to the layout
+        info_label = QLabel("Change the number of employees you would like for each day")
+        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter) # Center-align the text for better appearance
+        window_layout.addWidget(info_label)
+
+        # Call the existing method to create the frame with the settings UI
+        settings_frame = self._create_max_settings_frame()
+
+        # Add the frame to the new window's layout
+        window_layout.addWidget(settings_frame)
+
+        # The new window will automatically inherit the application's stylesheet (dark/light mode)
+        self.max_settings_window.show()
 
     def _create_max_settings_frame(self):
         frame = QFrame()
@@ -368,7 +402,7 @@ class SchedulerApp(QMainWindow):
             v_box.addWidget(entry)
             self.day_max_grid.addLayout(v_box, 0, i)
 
-        self.update_max_button = QPushButton("Update Max")
+        self.update_max_button = QPushButton("Update Target Employees")
         self.update_max_button.clicked.connect(self.update_max_values_and_refresh)
 
         layout.addLayout(self.day_max_grid)
@@ -975,6 +1009,7 @@ class SchedulerApp(QMainWindow):
 
     def update_max_values_and_refresh(self):
         self.update_final_schedule_display()
+        self.max_settings_window.close()
 
     def export_schedule(self):
         if not any(self.schedule.scheduled.values()):
