@@ -328,14 +328,21 @@ class SchedulerApp(QMainWindow):
 
     def _create_left_column(self):
         layout = QVBoxLayout()
-        # layout.addWidget(QLabel("<h2>Final Schedule</h2>"))
 
-        # Final Schedule Preview
+        # Final Schedule Preview with Scroll
+        final_schedule_scroll_area = QScrollArea()
+        final_schedule_scroll_area.setWidgetResizable(True)
         self.final_schedule_frame_container = QFrame()
         self.final_schedule_frame_container.setFrameShape(QFrame.Shape.StyledPanel)
-        layout.addWidget(self.final_schedule_frame_container, 1) # Stretchable
+
+        # Add the final schedule frame container to the scroll area
+        final_schedule_scroll_area.setWidget(self.final_schedule_frame_container)
+        layout.addWidget(QLabel("<h2>Final Schedule</h2>"))
+        layout.addWidget(final_schedule_scroll_area, 1)  # Stretchable
+
+        # Build the schedule preview inside the container
         self._build_schedule_preview(self.final_schedule_frame_container)
-        
+
         # Max per Day Settings
         max_settings_frame = self._create_max_settings_frame()
         layout.addWidget(max_settings_frame)
