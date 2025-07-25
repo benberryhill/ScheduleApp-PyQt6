@@ -651,31 +651,6 @@ class SchedulerApp(QMainWindow):
         self.update_all_views()
         if not self.employees: self.clear_editor_fields()
 
-    def load_schedule_from_selection(self, selected_filename):
-        if selected_filename == "Select a schedule...":
-            self.schedule.clear_schedule()
-            self.update_all_views()
-            return
-        
-        schedule_file_path = os.path.join(EXCEL_FOLDER, selected_filename)
-        try:
-            df = pd.read_excel(schedule_file_path)
-            self.schedule.clear_schedule()
-            master_map = {emp.name: emp for emp in self.employees}
-            
-            for day in DAYS:
-                if day in df.columns:
-                    for name in df[day].dropna():
-                        name = str(name).strip()
-                        if name in master_map:
-                            self.schedule.assign_employee(master_map[name], day)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Load Error", f"Error loading schedule from {selected_filename}:\n{e}")
-            self.schedule.clear_schedule()
-        finally:
-            self.update_all_views()
-
     def update_all_views(self):
         # Store selected employee to re-select after update
         current_selected_name = self.selected_employee_obj.name if self.selected_employee_obj else None
@@ -883,14 +858,42 @@ class SchedulerApp(QMainWindow):
         if not self.selected_employee_obj:
             QMessageBox.warning(self, "Update Error", "No employee selected.")
             return
-        
+
+        # Update the in-memory employee object first
         emp = self.selected_employee_obj
         emp.notes = self.edit_notes.text().strip()
         emp.availability = {day: chk.isChecked() for day, chk in self.availability_boxes.items()}
-        
-        self.save_master_list()
+
+        # Directly update the Excel file to preserve order and other columns ---
+        try:
+            # Read the master file into a DataFrame
+            df = pd.read_excel(master_employee_file_path)
+
+            # Find the index of the employee to update by name
+            idx_list = df.index[df['Name'] == emp.name].tolist()
+            if not idx_list:
+                QMessageBox.critical(self, "Save Error", f"Could not find '{emp.name}' in the master file to update. It may have been renamed or deleted externally.")
+                return
+
+            idx = idx_list[0] # Get the integer index
+
+            # Update the DataFrame at the specific row for Notes and availability days
+            df.loc[idx, 'Notes'] = emp.notes
+            for day, available in emp.availability.items():
+                if day in df.columns: # Only update columns that exist in the file
+                    df.loc[idx, day] = 'Yes' if available else 'No'
+
+            # Save the entire modified DataFrame back to the Excel file
+            # This preserves row order, other columns (like 'Set Schedule'), and formatting
+            df.to_excel(master_employee_file_path, index=False)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to update master list file:\n{e}")
+            return
+
+        # Refresh the UI to reflect the changes
         self.update_all_views()
-        QMessageBox.information(self, "Success", f"Employee '{emp.name}' updated.")
+        QMessageBox.information(self, "Success", f"Employee '{emp.name}' updated in the master file.")
 
     def del_curr_employee(self):
         if not self.selected_employee_obj:
@@ -997,13 +1000,55 @@ class SchedulerApp(QMainWindow):
             QMessageBox.critical(self, "Restore Error", f"Failed to restore employee:\n{e}")
 
     def save_master_list(self):
+        """
+        Saves the current state of self.employees to the master Excel file.
+        This version preserves column order and extra columns (e.g., 'Set Schedule')
+        by reading the original file first. It's used for Add/Delete/Undo operations.
+        """
         try:
-            data = [{'Name': e.name, 'Notes': e.notes,
-                     **{d: ('Yes' if e.availability.get(d) else 'No') for d in DAYS}}
-                    for e in self.employees]
-            df = pd.DataFrame(data)
-            df = df[['Name'] + DAYS + ['Notes']]
-            df.to_excel(master_employee_file_path, index=False)
+            original_data = {}
+            all_columns = ['Name'] + DAYS + ['Notes']
+            extra_cols = []
+
+            # 1. Try to read the original file to get its structure and extra data
+            try:
+                df_orig = pd.read_excel(master_employee_file_path)
+                all_columns = df_orig.columns.tolist() # Preserve original column order
+                app_managed_cols = ['Name'] + DAYS + ['Notes']
+                extra_cols = [c for c in all_columns if c not in app_managed_cols]
+
+                if extra_cols:
+                    # Create a lookup dictionary for the extra data of each employee
+                    for _, row in df_orig.iterrows():
+                        if 'Name' in row and pd.notna(row['Name']):
+                            original_data[row['Name']] = {col: row[col] for col in extra_cols}
+            except Exception:
+                # File might not exist or is malformed, proceed with the default structure
+                pass
+
+            # 2. Build the list of data rows from the current in-memory employee list
+            data_to_save = []
+            for e in self.employees:
+                row_data = {
+                    'Name': e.name,
+                    'Notes': e.notes,
+                    **{d: ('Yes' if e.availability.get(d, False) else 'No') for d in DAYS}
+                }
+                # If we have stored extra data for this employee, add it back in
+                if e.name in original_data:
+                    row_data.update(original_data[e.name])
+                data_to_save.append(row_data)
+
+            # 3. Create the final DataFrame
+            df_final = pd.DataFrame(data_to_save)
+
+            # 4. Ensure all original columns are present and in the correct order
+            # This prevents columns from being dropped or reordered
+            df_final = df_final.reindex(columns=all_columns, fill_value='')
+
+            # 5. Save to the master file, overwriting it with the preserved structure
+            df_final.to_excel(master_employee_file_path, index=False)
+
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Failed to save master list:\n{e}")
 
