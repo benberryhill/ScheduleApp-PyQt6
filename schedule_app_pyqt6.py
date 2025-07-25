@@ -14,7 +14,7 @@ EXCEL_FOLDER = "excel_files"
 RECENTLY_DELETED_FILE = "recently_deleted.xlsx" # For undo functionality
 EMPLOYEE_FILE = "Employees_Full_List.xlsx" # Master list
 DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-MAX_DISPLAY_ROWS_SCHEDULE = 50 # Max rows per day in Final Schedule
+MAX_DISPLAY_ROWS_SCHEDULE = 60 # Max rows per day in Final Schedule
 MAX_ROWS_UNASSIGNED_PER_DAY_COLUMN = 60 # Max rows per day in the Unassigned Employees grid
 
 # --- Dummy File Creation (Same as original) ---
@@ -167,7 +167,6 @@ class ClickableLabel(QLabel):
             success = self.main_window.schedule.assign_employee(self.employee_obj, self.day_key)
             if success:
                 self.main_window.update_all_views()
-                print(f"Added {self.employee_obj.name} to the final schedule on {self.day_key}.")
             else:
                 print(f"Failed to add {self.employee_obj.name} to the schedule on {self.day_key}.")
         except Exception as e:
@@ -218,11 +217,12 @@ class SchedulerApp(QMainWindow):
 
         # Load initial data to determine UI size
         initial_employee_df, initial_employee_count = self._load_and_count_master_file_data()
-        self.max_display_rows_per_list = max(30, initial_employee_count + 10)
+        self.max_display_rows_per_list = max(30, initial_employee_count)
+        print(self.max_display_rows_per_list)
 
         # Create UI
         self._setup_ui()
-        
+
         # Load data into UI
         self.load_master_employees(initial_employee_df)
 
@@ -316,9 +316,12 @@ class SchedulerApp(QMainWindow):
     def _create_top_bar(self):
         layout = QHBoxLayout()
 
-        # Replace ComboBox with a Button to open Max Settings
+        # Target Settings
         self.max_settings_button = QPushButton("Target Settings")
         self.max_settings_button.clicked.connect(self._open_max_settings_window)
+
+        self.auto_schedule_button = QPushButton("Auto Schedule Available Employees")
+        self.auto_schedule_button.clicked.connect(self.auto_schedule_available_employees)
 
         self.export_button = QPushButton("Export Schedule")
         self.export_button.clicked.connect(self.export_schedule)
@@ -327,6 +330,7 @@ class SchedulerApp(QMainWindow):
         self.toggle_theme_button.toggled.connect(self.toggle_theme)
 
         layout.addWidget(self.max_settings_button)
+        layout.addWidget(self.auto_schedule_button)
         layout.addStretch(1)
         layout.addWidget(self.toggle_theme_button)
         layout.addWidget(self.export_button)
@@ -766,12 +770,71 @@ class SchedulerApp(QMainWindow):
                     lbl.setText(emp.name)
                     lbl.employee_obj = emp
                     lbl.day_key = day
+                    lbl.setStyleSheet(self.get_alternating_row_style(i))
+                    lbl.show()
                 else:
                     lbl.setText("")
                     lbl.employee_obj = None
                     lbl.day_key = None
-                # Apply alternating row style to these inner labels
-                lbl.setStyleSheet(self.get_alternating_row_style(i))
+                    lbl.hide()
+
+    def auto_schedule_available_employees(self):
+        """
+        Automatically schedules employees based on seniority (file order) up to the
+        target number specified for each day.
+        """
+        # --- Step 1: Get employees in seniority order by re-reading the master file ---
+        try:
+            df = pd.read_excel(master_employee_file_path)
+            # Create a dictionary of the current Employee objects for quick, efficient lookup
+            # This is better than creating new objects, as it maintains object consistency.
+            employee_map = {e.name: e for e in self.employees}
+
+            # Get an ordered list of employee objects based on their order in the Excel file
+            seniority_ordered_employees = []
+            for name in df['Name'].dropna():
+                if name in employee_map:
+                    seniority_ordered_employees.append(employee_map[name])
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not read master employee file for auto-scheduling:\n{e}")
+            return
+
+        # --- Step 2: Get the target number of employees for each day from the UI ---
+        try:
+            max_per_day = {day: int(self.max_entries[day].text()) for day in DAYS if self.max_entries[day].text().isdigit()}
+        except Exception as e:
+            QMessageBox.critical(self, "Input Error", f"Invalid target number entered for a day.\nPlease enter whole numbers only.\n{e}")
+            return
+
+        # --- Step 3: Main scheduling logic ---
+        employees_added_count = 0
+
+        # Iterate through each day of the week
+        for day in DAYS:
+            # Determine the target count for this specific day
+            target_count = max_per_day.get(day, 0)
+
+            # Iterate through employees IN SENIORITY ORDER
+            for emp in seniority_ordered_employees:
+                # Stop if we've already reached or exceeded the target for this day
+                if len(self.schedule.scheduled[day]) >= target_count:
+                    break  # Move to the next day
+
+                # Check all conditions for scheduling:
+                # 1. Is the employee available on this day?
+                is_available = emp.availability.get(day, False)
+                # 2. Is the employee NOT already on the schedule for this day?
+                is_already_scheduled = any(e.name == emp.name for e in self.schedule.scheduled[day])
+
+                if is_available and not is_already_scheduled:
+                    # If all conditions are met, assign the employee and increment our counter
+                    self.schedule.assign_employee(emp, day)
+                    employees_added_count += 1
+
+        # --- Step 4: Refresh the UI and provide feedback ---
+        self.update_all_views()
+        QMessageBox.information(self, "Auto-Schedule Complete",
+                                f"Finished auto-scheduling. {employees_added_count} new assignments were made.")
 
     def on_employee_label_click(self, row_index):
         if row_index < len(self.all_employees_rows):
@@ -1008,7 +1071,6 @@ class SchedulerApp(QMainWindow):
         try:
             original_data = {}
             all_columns = ['Name'] + DAYS + ['Notes']
-            extra_cols = []
 
             # 1. Try to read the original file to get its structure and extra data
             try:
