@@ -181,7 +181,7 @@ class SchedulerApp(QMainWindow):
 
         self.employees = []
         self.schedule = Schedule()
-        self.max_per_day = {day: 20 for day in DAYS}
+        self.max_per_day = {day: 35 for day in DAYS}
 
         self.max_entries = {}
         for i, day in enumerate(DAYS):
@@ -738,9 +738,23 @@ class SchedulerApp(QMainWindow):
 
     def update_unassigned_grid(self):
         """
-        Updates the grid displaying employees available but not yet scheduled for each day.
+        Updates the grid displaying employees available but not yet scheduled for each day,
+        and who are still under their max per week limit.
         """
-        # Reset all labels in the unassigned grid first
+        try:
+            df = pd.read_excel(master_employee_file_path)
+            max_per_week_map = dict(zip(df['Name'], df.get('Max Per Week', [7]*len(df))))
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not read master employee file:\n{e}")
+            return
+
+        # Count how many times each employee is already scheduled this week
+        current_schedule_count = {emp.name: 0 for emp in self.employees}
+        for day in DAYS:
+            for emp in self.schedule.scheduled.get(day, []):
+                current_schedule_count[emp.name] += 1
+
+        # Reset all labels in the unassigned grid
         for day in DAYS:
             for lbl in self.unassigned_labels[day]:
                 lbl.setText("")
@@ -748,29 +762,29 @@ class SchedulerApp(QMainWindow):
                 lbl.day_key = day
                 lbl.hide()
 
-        # Populate the grid day by day
+        # Populate grid day-by-day
         for day_index, day in enumerate(DAYS):
-            # Find employees available on this specific day AND not scheduled on this specific day
             available_and_unscheduled_for_day = []
             for emp in self.employees:
-                # Check if employee is available on this specific day
-                if emp.availability.get(day, False):
-                    # Check if employee is NOT already scheduled on this specific day
-                    is_scheduled_today = any(e.name == emp.name for e in self.schedule.scheduled[day])
-                    if not is_scheduled_today:
-                        available_and_unscheduled_for_day.append(emp)
+                if (
+                    emp.availability.get(day, False) and
+                    all(e.name != emp.name for e in self.schedule.scheduled[day]) and
+                    current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7)
+                ):
+                    available_and_unscheduled_for_day.append(emp)
 
-            # Sort them by name for consistent display
+            # Sort by name for consistent display
             available_and_unscheduled_for_day.sort(key=lambda e: e.name)
 
-            # Populate the labels for this day's column
+            # Show them in the unassigned label grid
             for r_idx, emp in enumerate(available_and_unscheduled_for_day):
                 if r_idx < len(self.unassigned_labels[day]):
                     lbl = self.unassigned_labels[day][r_idx]
                     lbl.setText(emp.name)
-                    lbl.employee_obj = emp # Attach employee object for drag
-                    lbl.setStyleSheet(self.get_alternating_row_style(r_idx)) # Apply alternating colors
+                    lbl.employee_obj = emp
+                    lbl.setStyleSheet(self.get_alternating_row_style(r_idx))
                     lbl.show()
+
 
     def update_final_schedule_display(self):
         current_max = {day: int(self.max_entries[day].text()) if self.max_entries[day].text().isdigit() else 999 for day in DAYS}
@@ -813,58 +827,67 @@ class SchedulerApp(QMainWindow):
 
     def auto_schedule_available_employees(self):
         """
-        Automatically schedules employees based on seniority (file order) up to the
-        target number specified for each day.
+        Automatically schedules employees day-by-day, prioritizing days with the fewest total available workers.
+        For each day, assigns the best available employees who haven't reached their max weekly limit.
         """
-        # --- Step 1: Get employees in seniority order by re-reading the master file ---
         try:
             df = pd.read_excel(master_employee_file_path)
-            # Create a dictionary of the current Employee objects for quick, efficient lookup
-            # This is better than creating new objects, as it maintains object consistency.
             employee_map = {e.name: e for e in self.employees}
-
-            # Get an ordered list of employee objects based on their order in the Excel file
-            seniority_ordered_employees = []
-            for name in df['Name'].dropna():
-                if name in employee_map:
-                    seniority_ordered_employees.append(employee_map[name])
+            max_per_week_map = dict(zip(df['Name'], df.get('Max Per Week', [7]*len(df))))
+            seniority_ordered_employees = [employee_map[name] for name in df['Name'].dropna() if name in employee_map]
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not read master employee file for auto-scheduling:\n{e}")
             return
 
-        # --- Step 2: Get the target number of employees for each day from the UI ---
+        # --- Step 1: Get max needed per day from UI ---
         try:
             max_per_day = {day: int(self.max_entries[day].text()) for day in DAYS if self.max_entries[day].text().isdigit()}
         except Exception as e:
             QMessageBox.critical(self, "Input Error", f"Invalid target number entered for a day.\nPlease enter whole numbers only.\n{e}")
             return
 
-        # --- Step 3: Main scheduling logic ---
+        # --- Step 2: Count how many people are available per day (day difficulty) ---
+        day_availability_counts = {day: 0 for day in DAYS}
+        for emp in seniority_ordered_employees:
+            for day in DAYS:
+                if emp.availability.get(day, False):
+                    day_availability_counts[day] += 1
+
+        # Order days from hardest to fill to easiest
+        sorted_days = sorted(DAYS, key=lambda d: day_availability_counts[d])
+
+        # --- Step 3: Track how many times each employee is scheduled ---
+        current_schedule_count = {emp.name: 0 for emp in self.employees}
+        for day in DAYS:
+            for emp in self.schedule.scheduled.get(day, []):
+                current_schedule_count[emp.name] += 1
+
+        # --- Step 4: Assign employees to each day in difficulty order ---
         employees_added_count = 0
 
-        # Iterate through each day of the week
-        for day in DAYS:
-            # Determine the target count for this specific day
-            target_count = max_per_day.get(day, 0)
+        for day in sorted_days:
+            needed = max_per_day.get(day, 0) - len(self.schedule.scheduled.get(day, []))
+            if needed <= 0:
+                continue  # Day already full
 
-            # Iterate through employees IN SENIORITY ORDER
-            for emp in seniority_ordered_employees:
-                # Stop if we've already reached or exceeded the target for this day
-                if len(self.schedule.scheduled[day]) >= target_count:
-                    break  # Move to the next day
+            # Filter eligible employees: available that day and under their weekly limit
+            eligible_employees = [
+                emp for emp in seniority_ordered_employees
+                if emp.availability.get(day, False)
+                and current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7)
+                and emp.name not in [e.name for e in self.schedule.scheduled.get(day, [])]
+            ]
 
-                # Check all conditions for scheduling:
-                # 1. Is the employee available on this day?
-                is_available = emp.availability.get(day, False)
-                # 2. Is the employee NOT already on the schedule for this day?
-                is_already_scheduled = any(e.name == emp.name for e in self.schedule.scheduled[day])
+            # Sort by fewest total current assignments to balance load
+            eligible_employees.sort(key=lambda e: current_schedule_count[e.name])
 
-                if is_available and not is_already_scheduled:
-                    # If all conditions are met, assign the employee and increment our counter
-                    self.schedule.assign_employee(emp, day)
-                    employees_added_count += 1
+            # Assign up to needed
+            for emp in eligible_employees[:needed]:
+                self.schedule.assign_employee(emp, day)
+                current_schedule_count[emp.name] += 1
+                employees_added_count += 1
 
-        # --- Step 4: Refresh the UI and provide feedback ---
+        # --- Step 5: Done ---
         self.update_all_views()
         QMessageBox.information(self, "Auto-Schedule Complete",
                                 f"Finished auto-scheduling. {employees_added_count} new assignments were made.")
