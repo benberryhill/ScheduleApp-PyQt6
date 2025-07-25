@@ -85,18 +85,17 @@ class ClickableLabel(QLabel):
         self.employee_obj = None
         self.day_key = None  # This must hold the day (e.g., 'Monday') for context menu actions
         self.is_draggable = False
-        self.is_clickable_remove = False
+        self.is_clickable_remove = False # Set to True for labels in the final schedule
 
     def mousePressEvent(self, event):
         try:
             if event.button() == Qt.MouseButton.LeftButton:
-                # Handle left-click events
+                # Handle left-click drag events
                 if self.is_draggable and self.employee_obj:
                     self.main_window.on_drag_start(self)
-                elif self.is_clickable_remove and self.employee_obj and self.day_key:
-                    self.main_window.on_final_schedule_click(self)
+                # The left-click to remove action is now handled by the right-click context menu.
             elif event.button() == Qt.MouseButton.RightButton:
-                # Handle right-click events
+                # Handle right-click events to show a context menu
                 if self.employee_obj:
                     self.show_context_menu(event.globalPosition().toPoint())
             else:
@@ -106,15 +105,33 @@ class ClickableLabel(QLabel):
             print(f"Error during mousePressEvent: {e}")
 
     def show_context_menu(self, global_position):
-        """ Create and show a context menu on right-click. """
+        """ Create and show a context menu with actions relevant to the label's location. """
         try:
+            # A menu is only relevant if we have an employee and a day context.
+            if not self.employee_obj or not self.day_key:
+                return
+
             menu = QMenu(self)
+            action_added = False
 
-            # Add actions to the context menu
-            add_to_schedule_action = menu.addAction("Add to Final Schedule")
-            add_to_schedule_action.triggered.connect(self.on_add_to_schedule)
+            # Context 1: Label is in the "Final Schedule" list.
+            # `is_clickable_remove` is True only for these labels.
+            if self.is_clickable_remove:
+                remove_action = menu.addAction(f"Remove '{self.employee_obj.name}' from schedule")
+                remove_action.triggered.connect(self.on_remove_from_schedule)
+                action_added = True
 
-            # Safely display the menu at the correct global position
+            # Context 2: Label is in the "Unassigned Employees" list.
+            # These labels are draggable, have a day_key, but are not `is_clickable_remove`.
+            elif self.is_draggable and not self.is_clickable_remove:
+                add_action = menu.addAction(f"Add '{self.employee_obj.name}' to schedule")
+                add_action.triggered.connect(self.on_add_to_schedule)
+                action_added = True
+
+            # If no relevant action was found, do not show a menu.
+            if not action_added:
+                return
+
             # Apply dynamic style based on dark mode
             if self.main_window.is_dark_mode:
                 menu.setStyleSheet("""
@@ -154,13 +171,9 @@ class ClickableLabel(QLabel):
             print(f"Error during context menu creation: {e}")
 
     def on_add_to_schedule(self):
-        """ Handle the 'Add to Final Schedule' option. """
+        """ Handle the 'Add to Final Schedule' context menu action. """
         try:
-            if not self.employee_obj:
-                print("Error: No employee object found for this label.")
-                return
-            if not self.day_key:
-                print("Error: No day key assigned to this label.")
+            if not self.employee_obj or not self.day_key:
                 return
 
             # Call the scheduling logic
@@ -171,6 +184,24 @@ class ClickableLabel(QLabel):
                 print(f"Failed to add {self.employee_obj.name} to the schedule on {self.day_key}.")
         except Exception as e:
             print(f"Error during 'Add to Final Schedule' action: {e}")
+
+    def on_remove_from_schedule(self):
+        """ Handle the 'Remove from Schedule' context menu action. """
+        try:
+            if not self.employee_obj or not self.day_key:
+                return
+
+            # Call the removal logic from the main schedule object
+            success = self.main_window.schedule.remove_employee(self.employee_obj, self.day_key)
+            if success:
+                self.main_window.update_all_views()
+                # Re-select the employee to maintain context in the editor
+                self.main_window.select_employee_by_object(self.employee_obj)
+            else:
+                # This case is unlikely if the UI is correct, but good to have
+                print(f"UI state issue: Could not find {self.employee_obj.name} to remove from {self.day_key}")
+        except Exception as e:
+            print(f"Error during 'Remove from Schedule' action: {e}")
 
 # --- Main Application ---
 class SchedulerApp(QMainWindow):
@@ -784,7 +815,6 @@ class SchedulerApp(QMainWindow):
                     lbl.employee_obj = emp
                     lbl.setStyleSheet(self.get_alternating_row_style(r_idx))
                     lbl.show()
-
 
     def update_final_schedule_display(self):
         current_max = {day: int(self.max_entries[day].text()) if self.max_entries[day].text().isdigit() else 999 for day in DAYS}
