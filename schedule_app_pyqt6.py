@@ -177,7 +177,7 @@ class SchedulerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Semi-Auto Scheduler")
-        self.setGeometry(100, 100, 1700, 950)
+        self.setGeometry(100, 100, 1800, 950)
 
         self.employees = []
         self.schedule = Schedule()
@@ -269,13 +269,46 @@ class SchedulerApp(QMainWindow):
             QScrollBar:vertical {
                 border: none;
                 background: #3c3c3c;
-                width: 10px;
+                width: 8px;
                 margin: 0px 0px 0px 0px;
             }
             QScrollBar::handle:vertical {
                 background: #555555;
                 min-height: 20px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #6a6a6a;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                border: none;
+                background: none;
+                height: 0px;
+            }
+            QScrollBar:horizontal {
+                border: none;
+                background: #3c3c3c;
+                height: 10px;
+                margin: 0px 0px 0px 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #555555;
+                min-width: 20px;
                 border-radius: 5px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #6a6a6a;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: none;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                border: none;
+                background: none;
+                height: 0px;
             }
             QCheckBox::indicator {
                 width: 13px;
@@ -340,14 +373,14 @@ class SchedulerApp(QMainWindow):
         layout = QVBoxLayout()
 
         # Final Schedule Preview with Scroll
-        final_schedule_scroll_area = QScrollArea()
-        final_schedule_scroll_area.setWidgetResizable(True)
+        self.final_schedule_scroll_area = QScrollArea()
+        self.final_schedule_scroll_area.setWidgetResizable(True)
         self.final_schedule_frame_container = QFrame()
         self.final_schedule_frame_container.setFrameShape(QFrame.Shape.StyledPanel)
 
         # Add the final schedule frame container to the scroll area
-        final_schedule_scroll_area.setWidget(self.final_schedule_frame_container)
-        layout.addWidget(final_schedule_scroll_area, 1)  # Stretchable
+        self.final_schedule_scroll_area.setWidget(self.final_schedule_frame_container)
+        layout.addWidget(self.final_schedule_scroll_area, 1)  # Stretchable
 
         # Build the schedule preview inside the container
         self._build_schedule_preview(self.final_schedule_frame_container)
@@ -1198,7 +1231,6 @@ class SchedulerApp(QMainWindow):
         else:
             app.setStyleSheet(self.light_stylesheet)
         self.update_all_views()
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
