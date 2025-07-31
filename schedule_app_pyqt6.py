@@ -4,13 +4,24 @@ import pandas as pd
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox, QScrollArea, QFrame,
-    QMessageBox, QSizePolicy, QMenu
+    QMessageBox, QSizePolicy, QMenu, QDialog, QColorDialog, QTabWidget, QGroupBox,
+    QDialogButtonBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent
-from PyQt6.QtGui import QPalette, QColor
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QSize
+from PyQt6.QtGui import QPalette, QColor, QIcon
 
 # --- Configuration ---
-EXCEL_FOLDER = "excel_files"
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+EXCEL_FOLDER_NAME = "excel_files"
+EXCEL_FOLDER = resource_path(EXCEL_FOLDER_NAME)
 RECENTLY_DELETED_FILE = "recently_deleted.xlsx" # For undo functionality
 EMPLOYEE_FILE = "Employees_Full_List.xlsx" # Master list
 DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
@@ -76,6 +87,159 @@ class Schedule:
         if not isinstance(emp_to_check, Employee): return False
         return any(emp_to_check.name == e.name for day_list in self.scheduled.values() for e in day_list)
 
+# --- Settings and Target Employees Window ---
+class SettingsWindow(QDialog):
+    """
+    A dialog window for managing application settings, including target
+    employee counts and theme colors.
+    """
+    def __init__(self, main_window):
+        super().__init__(main_window)
+        self.main_window = main_window
+        self.setWindowTitle("⚙️ Settings")
+        self.setMinimumSize(600, 450)
+
+        # Temporary storage for settings until 'Apply' is clicked
+        self.temp_theme_config = self.main_window.theme_config.copy()
+        self.temp_max_per_day = self.main_window.max_per_day.copy()
+
+        # Main layout
+        layout = QVBoxLayout(self)
+
+        # Tabs for different settings categories
+        tab_widget = QTabWidget()
+        tab_widget.addTab(self._create_general_tab(), "General")
+        tab_widget.addTab(self._create_theme_tab('light'), "Light Theme")
+        tab_widget.addTab(self._create_theme_tab('dark'), "Dark Theme")
+        layout.addWidget(tab_widget)
+
+        # Standard OK/Apply/Cancel buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok |
+            QDialogButtonBox.StandardButton.Apply |
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept) # OK
+        button_box.rejected.connect(self.reject) # Cancel
+        button_box.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(self.apply_changes)
+        layout.addWidget(button_box)
+
+    def _create_general_tab(self):
+        """Creates the 'General' settings tab."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        # --- Target Employees Settings ---
+        targets_group = QGroupBox("Target Employees Per Day")
+        targets_layout = QGridLayout(targets_group)
+
+        self.max_entries_edits = {}
+        for i, day in enumerate(DAYS):
+            day_label = QLabel(day)
+            entry = QLineEdit(str(self.temp_max_per_day.get(day, 35)))
+            entry.setFixedWidth(50)
+            entry.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.max_entries_edits[day] = entry
+
+            col_layout = QVBoxLayout()
+            col_layout.addWidget(day_label)
+            col_layout.addWidget(entry)
+            targets_layout.addLayout(col_layout, 0, i)
+
+        layout.addWidget(targets_group)
+
+        # --- Highlight Color Settings ---
+        highlight_group = QGroupBox("Selection Highlight Color")
+        highlight_layout = QHBoxLayout(highlight_group)
+        highlight_layout.addWidget(QLabel("Highlight Color:"))
+
+        self.highlight_color_button = self._create_color_picker_button(
+            self.temp_theme_config['highlight_bg'],
+            lambda color: self.temp_theme_config.update({'highlight_bg': color.name()})
+        )
+        highlight_layout.addWidget(self.highlight_color_button)
+        highlight_layout.addStretch()
+        layout.addWidget(highlight_group)
+
+        layout.addStretch()
+        return widget
+
+    def _create_theme_tab(self, theme_mode):
+        """Creates a tab for managing theme-specific colors ('light' or 'dark')."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        group = QGroupBox("Final Schedule Header Colors")
+        grid_layout = QGridLayout(group)
+        grid_layout.setColumnStretch(1, 1)
+
+        header_colors = self.temp_theme_config[f'{theme_mode}_header_colors']
+
+        # Define nice labels for the UI
+        status_labels = {
+            "empty": "Empty (No one scheduled)",
+            "warning": "Warning (Has people, but below target)",
+            "semi_full": "Full (Target met)",
+            "full": "Over Capacity (More than target)",
+        }
+
+        for i, (status, color_hex) in enumerate(header_colors.items()):
+            label = QLabel(status_labels.get(status, status.title()) + ":")
+
+            # The callback updates the temporary config when a new color is picked
+            callback = lambda color, s=status: self.temp_theme_config[f'{theme_mode}_header_colors'].update({s: color.name()})
+
+            color_button = self._create_color_picker_button(color_hex, callback)
+
+            grid_layout.addWidget(label, i, 0)
+            grid_layout.addWidget(color_button, i, 1)
+
+        layout.addWidget(group)
+        layout.addStretch()
+        return widget
+
+    def _create_color_picker_button(self, initial_color, on_color_changed):
+        """Helper to create a button that opens a color dialog."""
+        button = QPushButton()
+        button.setFixedSize(120, 25)
+
+        def pick_color():
+            current_color = QColor(button.property("color_hex"))
+            new_color = QColorDialog.getColor(current_color, self, "Select Color")
+            if new_color.isValid():
+                self._update_button_color(button, new_color)
+                on_color_changed(new_color)
+
+        button.clicked.connect(pick_color)
+        self._update_button_color(button, QColor(initial_color))
+        return button
+
+    def _update_button_color(self, button, color):
+        """Updates a button's appearance to show the selected color."""
+        button.setProperty("color_hex", color.name())
+        # Set text color to black or white for contrast
+        text_color = "white" if color.lightness() < 128 else "black"
+        button.setStyleSheet(f"background-color: {color.name()}; color: {text_color};")
+        button.setText(color.name())
+
+    def apply_changes(self):
+        """Applies the settings to the main window without closing the dialog."""
+        # Apply target counts
+        for day, entry in self.max_entries_edits.items():
+            if entry.text().isdigit():
+                self.main_window.max_per_day[day] = int(entry.text())
+
+        # Apply theme config
+        self.main_window.theme_config = self.temp_theme_config.copy()
+
+        # Tell the main window to refresh its styles and UI
+        self.main_window.apply_settings_and_refresh()
+
+    def accept(self):
+        """Applies changes and closes the dialog (OK button)."""
+        self.apply_changes()
+        super().accept()
+
 # --- Custom Qt Widget for Click/Drag Events ---
 class ClickableLabel(QLabel):
     """ A custom QLabel that can hold employee/day data and handle mouse clicks. """
@@ -90,10 +254,15 @@ class ClickableLabel(QLabel):
     def mousePressEvent(self, event):
         try:
             if event.button() == Qt.MouseButton.LeftButton:
-                # Handle left-click drag events
+                # If this label is in the final schedule, trigger the highlight function.
+                if self.is_clickable_remove and self.employee_obj:
+                    self.main_window.on_schedule_label_highlight_click(self.employee_obj)
+                    return # Exclusive action for this type of label
+
+                # Handle left-click drag events for other labels
                 if self.is_draggable and self.employee_obj:
                     self.main_window.on_drag_start(self)
-                # The left-click to remove action is now handled by the right-click context menu.
+
             elif event.button() == Qt.MouseButton.RightButton:
                 # Handle right-click events to show a context menu
                 if self.employee_obj:
@@ -214,30 +383,50 @@ class SchedulerApp(QMainWindow):
         self.schedule = Schedule()
         self.max_per_day = {day: 35 for day in DAYS}
 
-        self.max_entries = {}
-        for i, day in enumerate(DAYS):
-            entry = QLineEdit(str(self.max_per_day[day]))
-            self.max_entries[day] = entry
+        # self.max_entries = {}
+        # for i, day in enumerate(DAYS):
+        #     entry = QLineEdit(str(self.max_per_day[day]))
+        #     self.max_entries[day] = entry
 
         self.selected_employee_obj = None
         self.selected_row_widgets = None
         self.drag_data = {'label_widget': None, 'employee': None}
+        self.highlighted_employee_obj = None # To track the employee for grid highlighting
 
         # For mapping widgets to employee objects, similar to the original's approach
         self.widget_to_employee = {}
 
+        self.theme_config = {
+            'highlight_bg': QColor(0, 120, 215).name(), # Default system blue
+            'light_header_colors': {
+                "empty": "#f0f0f0",
+                "warning": "indianred",
+                "semi_full": "royalblue",
+                "full": "lightseagreen",
+            },
+            'dark_header_colors': {
+                "empty": "#3c3c3c",
+                "warning": "darkred",
+                "semi_full": "darkblue",
+                "full": "teal",
+            }
+        }
+        # This dictionary will hold the generated stylesheets
+        self.header_styles = {}
+
         # Theming
         self.is_dark_mode = False
         self._setup_styles()
-        
+        self._generate_header_styles() # Generate styles from the new config
+        self._update_highlight_style() # Initialize the highlight style based on the current palette
         # Define styles for the schedule day headers
         self.header_base_style_template = "QLabel {{ font-weight: bold; padding: 4px; border-radius: 4px; color: {text_color}; background-color: {bg_color}; }}"
         
         self.dark_header_styles = {
             "empty": self.header_base_style_template.format(bg_color="#3c3c3c", text_color="white"), # Darker gray for empty
             "warning": self.header_base_style_template.format(bg_color="darkred", text_color="white"), # Darker red for warning
-            "semi_full": self.header_base_style_template.format(bg_color="darkblue", text_color="white"), # Darker blue for semi-full
-            "full": self.header_base_style_template.format(bg_color="teal", text_color="white"), # Teal for over capacity
+            "semi_full": self.header_base_style_template.format(bg_color="#0068F0", text_color="white"), # Darker blue for semi-full
+            "full": self.header_base_style_template.format(bg_color="00C3C3", text_color="white"), # Teal for over capacity
         }
         self.light_header_styles = {
             "empty": self.header_base_style_template.format(bg_color="#f0f0f0", text_color="black"), # Lighter gray for empty
@@ -347,6 +536,63 @@ class SchedulerApp(QMainWindow):
             }
         """
 
+    def _generate_header_styles(self):
+        """
+        Generates header stylesheets from the theme_config dictionary.
+        This makes the theme dynamically configurable.
+        """
+        base_template = "QLabel {{ font-weight: bold; padding: 4px; border-radius: 4px; color: {text_color}; background-color: {bg_color}; }}"
+
+        # --- Generate Light Theme Styles ---
+        light_styles = {}
+        for status, bg_hex in self.theme_config['light_header_colors'].items():
+            bg_color = QColor(bg_hex)
+            text_color = "white" if bg_color.lightness() < 128 else "black"
+            light_styles[status] = base_template.format(bg_color=bg_hex, text_color=text_color)
+
+        # --- Generate Dark Theme Styles ---
+        dark_styles = {}
+        for status, bg_hex in self.theme_config['dark_header_colors'].items():
+            bg_color = QColor(bg_hex)
+            text_color = "white" if bg_color.lightness() < 128 else "black"
+            dark_styles[status] = base_template.format(bg_color=bg_hex, text_color=text_color)
+
+        self.header_styles = {'light': light_styles, 'dark': dark_styles}
+
+    def apply_settings_and_refresh(self):
+        """
+        Applies all settings from the config and refreshes the entire UI.
+        This is the central point for applying changes from the SettingsWindow.
+        """
+        # 1. Update max day values in the main UI (if they exist, for compatibility)
+        # The primary source of truth is now self.max_per_day
+        if hasattr(self, 'max_entries'):
+            for day, value in self.max_per_day.items():
+                if day in self.max_entries:
+                    self.max_entries[day].setText(str(value))
+
+        # 2. Apply palette for highlight color
+        palette = self.palette()
+        highlight_color = QColor(self.theme_config['highlight_bg'])
+        palette.setColor(QPalette.ColorRole.Highlight, highlight_color)
+        text_color = Qt.GlobalColor.white if highlight_color.lightness() < 128 else Qt.GlobalColor.black
+        palette.setColor(QPalette.ColorRole.HighlightedText, text_color)
+        self.setPalette(palette)
+
+        # 3. Regenerate all dynamic styles
+        self._generate_header_styles()
+        self._update_highlight_style()
+
+        # 4. Refresh all views to show changes
+        self.update_all_views()
+
+    def _open_settings_window(self):
+        """Opens the main settings dialog."""
+        # The dialog is modal, so we don't need to check if it's already visible.
+        # A new instance is created each time.
+        dialog = SettingsWindow(self)
+        dialog.exec() # exec() shows the dialog and blocks until closed
+
     def _load_and_count_master_file_data(self):
         try:
             if not os.path.exists(master_employee_file_path): return None, 0
@@ -380,9 +626,12 @@ class SchedulerApp(QMainWindow):
     def _create_top_bar(self):
         layout = QHBoxLayout()
 
-        # Target Settings
-        self.max_settings_button = QPushButton("Target Settings")
-        self.max_settings_button.clicked.connect(self._open_max_settings_window)
+        self.settings_button = QPushButton("⚙️ Settings")
+        self.settings_button.clicked.connect(self._open_settings_window)
+        # Make the icon a bit larger for visibility
+        font = self.settings_button.font()
+        font.setPointSize(11)
+        self.settings_button.setFont(font)
 
         self.auto_schedule_button = QPushButton("Auto Schedule Available Employees")
         self.auto_schedule_button.clicked.connect(self.auto_schedule_available_employees)
@@ -393,7 +642,7 @@ class SchedulerApp(QMainWindow):
         self.toggle_theme_button = QCheckBox("Dark Mode")
         self.toggle_theme_button.toggled.connect(self.toggle_theme)
 
-        layout.addWidget(self.max_settings_button)
+        layout.addWidget(self.settings_button)
         layout.addWidget(self.auto_schedule_button)
         layout.addStretch(1)
         layout.addWidget(self.toggle_theme_button)
@@ -416,67 +665,6 @@ class SchedulerApp(QMainWindow):
         # Build the schedule preview inside the container
         self._build_schedule_preview(self.final_schedule_frame_container)
         return layout
-
-    def _open_max_settings_window(self):
-        """
-        Creates and shows a new, standalone window for managing max employees per day.
-        If the window already exists and is visible, it will be brought to the front.
-        """
-        # Prevent opening multiple instances of the settings window
-        if hasattr(self, 'max_settings_window') and self.max_settings_window.isVisible():
-            self.max_settings_window.raise_()  # Bring to front
-            self.max_settings_window.activateWindow()
-            return
-
-        # Create a new standalone QWidget for the Max Settings window
-        self.max_settings_window = QWidget()
-        self.max_settings_window.setWindowTitle("Target Employees Per Day")
-        self.max_settings_window.setGeometry(50, 50, 500, 50)
-
-        # The main layout for the new window
-        window_layout = QVBoxLayout(self.max_settings_window)
-
-        # Create the new info label and add to the layout
-        info_label = QLabel("Change the number of employees you would like for each day")
-        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter) # Center-align the text for better appearance
-        window_layout.addWidget(info_label)
-
-        # Call the existing method to create the frame with the settings UI
-        settings_frame = self._create_max_settings_frame()
-
-        # Add the frame to the new window's layout
-        window_layout.addWidget(settings_frame)
-
-        # The new window will automatically inherit the application's stylesheet (dark/light mode)
-        self.max_settings_window.show()
-
-    def _create_max_settings_frame(self):
-        frame = QFrame()
-        frame.setFrameShape(QFrame.Shape.StyledPanel)
-        layout = QHBoxLayout(frame)
-        
-        self.day_max_grid = QGridLayout()
-        self.max_entries = {}
-        for i, day in enumerate(DAYS):
-            day_label = QLabel(day)
-            day_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            entry = QLineEdit(str(self.max_per_day[day]))
-            entry.setFixedWidth(45)
-            entry.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.max_entries[day] = entry
-            
-            v_box = QVBoxLayout()
-            v_box.addWidget(day_label)
-            v_box.addWidget(entry)
-            self.day_max_grid.addLayout(v_box, 0, i)
-
-        self.update_max_button = QPushButton("Update Target Employees")
-        self.update_max_button.clicked.connect(self.update_max_values_and_refresh)
-
-        layout.addLayout(self.day_max_grid)
-        layout.addStretch(1)
-        layout.addWidget(self.update_max_button)
-        return frame
 
     def _create_right_column(self):
         layout = QVBoxLayout()
@@ -813,20 +1001,24 @@ class SchedulerApp(QMainWindow):
                     lbl = self.unassigned_labels[day][r_idx]
                     lbl.setText(emp.name)
                     lbl.employee_obj = emp
-                    lbl.setStyleSheet(self.get_alternating_row_style(r_idx))
+                    if self.highlighted_employee_obj and self.highlighted_employee_obj.name == emp.name:
+                        lbl.setStyleSheet(self.highlight_style)
+                    else:
+                        lbl.setStyleSheet(self.get_alternating_row_style(r_idx))
                     lbl.show()
 
     def update_final_schedule_display(self):
-        current_max = {day: int(self.max_entries[day].text()) if self.max_entries[day].text().isdigit() else 999 for day in DAYS}
+        current_max = self.max_per_day
 
         for day, labels in self.schedule_labels.items():
             emps_on_day = self.schedule.scheduled[day]
             count = len(emps_on_day)
-            max_val = current_max[day]
+            max_val = current_max.get(day, 999)
             header = self.final_schedule_day_headers[day]
 
             # Select the correct map of styles based on the current theme
-            style_map = self.dark_header_styles if self.is_dark_mode else self.light_header_styles
+            theme_mode = 'dark' if self.is_dark_mode else 'light'
+            style_map = self.header_styles[theme_mode]
 
             # Determine the status to select the correct style
             status = "empty"
@@ -838,7 +1030,7 @@ class SchedulerApp(QMainWindow):
                 status = "full"
 
             # Apply the determined stylesheet to the header label
-            header.setStyleSheet(style_map[status])
+            header.setStyleSheet(style_map.get(status, ""))
 
             # Update the text labels for the day's schedule entries (these are the inner labels, not the headers)
             for i, lbl in enumerate(labels):
@@ -847,7 +1039,10 @@ class SchedulerApp(QMainWindow):
                     lbl.setText(emp.name)
                     lbl.employee_obj = emp
                     lbl.day_key = day
-                    lbl.setStyleSheet(self.get_alternating_row_style(i))
+                    if self.highlighted_employee_obj and self.highlighted_employee_obj.name == emp.name:
+                        lbl.setStyleSheet(self.highlight_style)
+                    else:
+                        lbl.setStyleSheet(self.get_alternating_row_style(i))
                     lbl.show()
                 else:
                     lbl.setText("")
@@ -870,11 +1065,7 @@ class SchedulerApp(QMainWindow):
             return
 
         # --- Step 1: Get max needed per day from UI ---
-        try:
-            max_per_day = {day: int(self.max_entries[day].text()) for day in DAYS if self.max_entries[day].text().isdigit()}
-        except Exception as e:
-            QMessageBox.critical(self, "Input Error", f"Invalid target number entered for a day.\nPlease enter whole numbers only.\n{e}")
-            return
+        max_per_day = self.max_per_day
 
         # --- Step 2: Count how many people are available per day (day difficulty) ---
         day_availability_counts = {day: 0 for day in DAYS}
@@ -968,13 +1159,24 @@ class SchedulerApp(QMainWindow):
                 idx = self.employees.index(self.selected_employee_obj)
                 if idx < len(self.all_employees_rows):
                     row_data = self.all_employees_rows[idx]
-                    highlight_color = self.palette().color(QPalette.ColorRole.Highlight)
-                    style = f"background-color: {highlight_color.name()};"
                     for w in row_data['conceptual_row_widgets']:
-                        w.setStyleSheet(style)
+                        w.setStyleSheet(self.highlight_style)
                     self.selected_row_widgets = row_data['conceptual_row_widgets']
             except ValueError:
                 self.selected_row_widgets = None
+
+    def on_schedule_label_highlight_click(self, employee_obj):
+        """ Handles left-clicks on the final schedule to highlight the employee everywhere. """
+        if self.highlighted_employee_obj == employee_obj:
+            # If clicking the same employee, toggle the highlight off.
+            self.highlighted_employee_obj = None
+        else:
+            # Otherwise, set the new employee to be highlighted.
+            self.highlighted_employee_obj = employee_obj
+
+        # Redraw the two grids that can show the highlight.
+        self.update_final_schedule_display()
+        self.update_unassigned_grid()
 
     def clear_editor_fields(self):
         self.edit_name.setEnabled(True)
@@ -1200,10 +1402,6 @@ class SchedulerApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Failed to save master list:\n{e}")
 
-    def update_max_values_and_refresh(self):
-        self.update_final_schedule_display()
-        self.max_settings_window.close()
-
     def export_schedule(self):
         if not any(self.schedule.scheduled.values()):
             QMessageBox.information(self, "Export", "Schedule is empty.")
@@ -1277,12 +1475,22 @@ class SchedulerApp(QMainWindow):
                     self.update_all_views()
                     self.select_employee_by_object(employee) # Reselect after removal
 
+    def _update_highlight_style(self):
+        """
+        Generates the stylesheet for highlighting based on the app's current palette.
+        This ensures the highlight color matches the native selection color (e.g., blue).
+        """
+        highlight_bg = self.palette().color(QPalette.ColorRole.Highlight).name()
+        highlight_text = self.palette().color(QPalette.ColorRole.HighlightedText).name()
+        self.highlight_style = f"background-color: {highlight_bg}; color: {highlight_text}; border-radius: 3px;"
+
     def toggle_theme(self, checked):
         self.is_dark_mode = checked
         if checked:
             app.setStyleSheet(self.dark_stylesheet)
         else:
             app.setStyleSheet(self.light_stylesheet)
+        self._update_highlight_style()
         self.update_all_views()
 
 if __name__ == "__main__":
@@ -1290,3 +1498,5 @@ if __name__ == "__main__":
     window = SchedulerApp()
     window.show()
     sys.exit(app.exec())
+
+# highlight names. settings menu. changed to global styles and max per day settings
