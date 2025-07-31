@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox, QScrollArea, QFrame,
     QMessageBox, QSizePolicy, QMenu, QDialog, QColorDialog, QTabWidget, QGroupBox,
-    QDialogButtonBox
+    QDialogButtonBox, QProgressBar
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QSize
 from PyQt6.QtGui import QPalette, QColor, QIcon
@@ -418,6 +418,7 @@ class SchedulerApp(QMainWindow):
         self.is_dark_mode = False
         self._setup_styles()
         self._generate_header_styles() # Generate styles from the new config
+        self._generate_progressbar_styles()
         self._update_highlight_style() # Initialize the highlight style based on the current palette
         # Define styles for the schedule day headers
         self.header_base_style_template = "QLabel {{ font-weight: bold; padding: 4px; border-radius: 4px; color: {text_color}; background-color: {bg_color}; }}"
@@ -559,6 +560,47 @@ class SchedulerApp(QMainWindow):
 
         self.header_styles = {'light': light_styles, 'dark': dark_styles}
 
+    def _generate_progressbar_styles(self):
+        """Generates QProgressBar stylesheets from the theme_config."""
+        self.progressbar_styles = {'light': {}, 'dark': {}}
+        base_template = """
+            QProgressBar {{
+                border: 1px solid {border_color};
+                border-radius: 5px;
+                text-align: center;
+                background-color: {bar_bg};
+                color: {text_color};
+            }}
+            QProgressBar::chunk {{
+                background-color: {chunk_color};
+                border-radius: 4px;
+            }}
+        """
+
+        # --- Generate Light Theme Styles ---
+        for status, bg_hex in self.theme_config['light_header_colors'].items():
+            chunk_color = QColor(bg_hex)
+            text_color = "white" if chunk_color.lightness() < 128 else "black"
+            style = base_template.format(
+                border_color='grey',
+                bar_bg='#e0e0e0',
+                text_color=text_color,
+                chunk_color=bg_hex
+            )
+            self.progressbar_styles['light'][status] = style
+
+        # --- Generate Dark Theme Styles ---
+        for status, bg_hex in self.theme_config['dark_header_colors'].items():
+            chunk_color = QColor(bg_hex)
+            text_color = "white" if chunk_color.lightness() < 128 else "black"
+            style = base_template.format(
+                border_color='#555555',
+                bar_bg='#3c3c3c',
+                text_color=text_color,
+                chunk_color=bg_hex
+            )
+            self.progressbar_styles['dark'][status] = style
+
     def apply_settings_and_refresh(self):
         """
         Applies all settings from the config and refreshes the entire UI.
@@ -581,6 +623,7 @@ class SchedulerApp(QMainWindow):
 
         # 3. Regenerate all dynamic styles
         self._generate_header_styles()
+        self._generate_progressbar_styles()
         self._update_highlight_style()
 
         # 4. Refresh all views to show changes
@@ -792,11 +835,31 @@ class SchedulerApp(QMainWindow):
         self.final_schedule_day_headers = {}
 
         for i, day in enumerate(DAYS):
-            header = QLabel(f"<b>{day}</b>")
-            header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            # header.setAutoFillBackground(True) # Needed for setting background color
-            self.final_schedule_day_headers[day] = header
-            self.schedule_layout.addWidget(header, 0, i)
+            # Create a container widget for each header cell
+            header_container = QWidget()
+            header_layout = QVBoxLayout(header_container)
+            header_layout.setContentsMargins(2, 2, 2, 2)
+            header_layout.setSpacing(3)
+
+            # 1. The Day Label
+            day_label = QLabel(f"<b>{day}</b>")
+            day_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            # 2. The Progress Bar
+            progress_bar = QProgressBar()
+            progress_bar.setFixedHeight(20)
+            progress_bar.setTextVisible(True)
+            progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            header_layout.addWidget(day_label)
+            header_layout.addWidget(progress_bar)
+
+            # Store references to both widgets for easy updates
+            self.final_schedule_day_headers[day] = {
+                'label': day_label,
+                'progress': progress_bar
+            }
+            self.schedule_layout.addWidget(header_container, 0, i)
 
             # Use a widget with a layout for the column of labels
             col_widget = QWidget()
@@ -1013,24 +1076,33 @@ class SchedulerApp(QMainWindow):
         for day, labels in self.schedule_labels.items():
             emps_on_day = self.schedule.scheduled[day]
             count = len(emps_on_day)
-            max_val = current_max.get(day, 999)
-            header = self.final_schedule_day_headers[day]
+            max_val = current_max.get(day, 35)
 
-            # Select the correct map of styles based on the current theme
+            # Get the header widgets (label and progress bar)
+            header_widgets = self.final_schedule_day_headers[day]
+            progress_bar = header_widgets['progress']
+
+            # Configure the progress bar's range, value, and text format
+            progress_bar.setRange(0, max_val)
+            progress_bar.setValue(count)
+            progress_bar.setFormat(f"{count} / {max_val}") # Custom text format
+
+            # Determine the visual status
             theme_mode = 'dark' if self.is_dark_mode else 'light'
-            style_map = self.header_styles[theme_mode]
-
-            # Determine the status to select the correct style
             status = "empty"
             if count > 0:
                 status = "warning"
             if count >= max_val:
                 status = "semi_full"
-            if count > max_val: # If more employees are scheduled than the max
+            if count > max_val:
                 status = "full"
 
-            # Apply the determined stylesheet to the header label
-            header.setStyleSheet(style_map.get(status, ""))
+            # Apply the corresponding style to the progress bar
+            style = self.progressbar_styles[theme_mode].get(status, "")
+            progress_bar.setStyleSheet(style)
+
+            # The original day label no longer needs its style updated, just its background
+            header_widgets['label'].setStyleSheet("background-color: transparent;")
 
             # Update the text labels for the day's schedule entries (these are the inner labels, not the headers)
             for i, lbl in enumerate(labels):
@@ -1052,61 +1124,99 @@ class SchedulerApp(QMainWindow):
 
     def auto_schedule_available_employees(self):
         """
-        Automatically schedules employees day-by-day, prioritizing days with the fewest total available workers.
-        For each day, assigns the best available employees who haven't reached their max weekly limit.
+        Automatically schedules employees day-by-day. It prioritizes filling harder days first.
+        For weekdays, it prioritizes senior employees. For weekends, it prioritizes newer employees
+        and tries to avoid scheduling them on both Saturday and Sunday if possible.
         """
         try:
             df = pd.read_excel(master_employee_file_path)
             employee_map = {e.name: e for e in self.employees}
             max_per_week_map = dict(zip(df['Name'], df.get('Max Per Week', [7]*len(df))))
             seniority_ordered_employees = [employee_map[name] for name in df['Name'].dropna() if name in employee_map]
+            reverse_seniority_employees = list(reversed(seniority_ordered_employees))
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not read master employee file for auto-scheduling:\n{e}")
             return
 
-        # --- Step 1: Get max needed per day from UI ---
         max_per_day = self.max_per_day
-
-        # --- Step 2: Count how many people are available per day (day difficulty) ---
-        day_availability_counts = {day: 0 for day in DAYS}
-        for emp in seniority_ordered_employees:
-            for day in DAYS:
-                if emp.availability.get(day, False):
-                    day_availability_counts[day] += 1
-
-        # Order days from hardest to fill to easiest
+        day_availability_counts = {day: sum(1 for e in seniority_ordered_employees if e.availability.get(day, False)) for day in DAYS}
         sorted_days = sorted(DAYS, key=lambda d: day_availability_counts[d])
 
-        # --- Step 3: Track how many times each employee is scheduled ---
         current_schedule_count = {emp.name: 0 for emp in self.employees}
         for day in DAYS:
             for emp in self.schedule.scheduled.get(day, []):
                 current_schedule_count[emp.name] += 1
 
-        # --- Step 4: Assign employees to each day in difficulty order ---
         employees_added_count = 0
 
         for day in sorted_days:
             needed = max_per_day.get(day, 0) - len(self.schedule.scheduled.get(day, []))
             if needed <= 0:
-                continue  # Day already full
+                continue
 
-            # Filter eligible employees: available that day and under their weekly limit
-            eligible_employees = [
-                emp for emp in seniority_ordered_employees
-                if emp.availability.get(day, False)
-                and current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7)
-                and emp.name not in [e.name for e in self.schedule.scheduled.get(day, [])]
-            ]
+            # --- NEW: Logic splits for Weekends vs Weekdays ---
+            if day in ["Sat", "Sun"]:
+                # --- WEEKEND LOGIC (Two-Pass System) ---
+                employee_pool = reverse_seniority_employees
+                other_weekend_day = "Sun" if day == "Sat" else "Sat"
 
-            # Sort by fewest total current assignments to balance load
-            eligible_employees.sort(key=lambda e: current_schedule_count[e.name])
+                # --- Pass 1: Prioritize employees NOT working the other weekend day ---
+                eligible_pass_1 = [
+                    emp for emp in employee_pool
+                    if emp.availability.get(day, False)
+                       and current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7)
+                       and emp.name not in [e.name for e in self.schedule.scheduled[day]]
+                       # This is the key new condition for Pass 1
+                       and emp.name not in [e.name for e in self.schedule.scheduled[other_weekend_day]]
+                ]
+                eligible_pass_1.sort(key=lambda e: current_schedule_count[e.name])
 
-            # Assign up to needed
-            for emp in eligible_employees[:needed]:
-                self.schedule.assign_employee(emp, day)
-                current_schedule_count[emp.name] += 1
-                employees_added_count += 1
+                # Assign from the ideal pool first
+                for emp in eligible_pass_1:
+                    if needed <= 0: break
+                    self.schedule.assign_employee(emp, day)
+                    current_schedule_count[emp.name] += 1
+                    employees_added_count += 1
+                    needed -= 1
+
+                # If we've filled the schedule, move to the next day
+                if needed <= 0:
+                    continue
+
+                # --- Pass 2: If still needed, fill with remaining staff (who might work both days) ---
+                eligible_pass_2 = [
+                    emp for emp in employee_pool
+                    if emp.availability.get(day, False)
+                       and current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7)
+                       and emp.name not in [e.name for e in self.schedule.scheduled[day]]
+                ]
+                eligible_pass_2.sort(key=lambda e: current_schedule_count[e.name])
+
+                # Assign from the less-ideal pool to fill the gaps
+                for emp in eligible_pass_2:
+                    if needed <= 0: break
+                    self.schedule.assign_employee(emp, day)
+                    current_schedule_count[emp.name] += 1
+                    employees_added_count += 1
+                    needed -= 1
+
+            else:
+                # --- WEEKDAY LOGIC (Original logic) ---
+                employee_pool = seniority_ordered_employees
+                eligible_employees = [
+                    emp for emp in employee_pool
+                    if emp.availability.get(day, False)
+                       and current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7)
+                       and emp.name not in [e.name for e in self.schedule.scheduled.get(day, [])]
+                ]
+                eligible_employees.sort(key=lambda e: current_schedule_count[e.name])
+
+                for emp in eligible_employees:
+                    if needed <= 0: break
+                    self.schedule.assign_employee(emp, day)
+                    current_schedule_count[emp.name] += 1
+                    employees_added_count += 1
+                    needed -= 1
 
         # --- Step 5: Done ---
         self.update_all_views()
@@ -1499,4 +1609,5 @@ if __name__ == "__main__":
     window.show()
     sys.exit(app.exec())
 
-# highlight names. settings menu. changed to global styles and max per day settings
+# package into exe with all needed files and imports
+# pyinstaller --noconfirm -D --windowed --icon="app_icon.ico" --add-data="excel_files;excel_files" schedule_app_pyqt6.py
