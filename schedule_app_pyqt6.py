@@ -5,9 +5,9 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox, QScrollArea, QFrame,
     QMessageBox, QSizePolicy, QMenu, QDialog, QColorDialog, QTabWidget, QGroupBox,
-    QDialogButtonBox, QProgressBar
+    QDialogButtonBox, QProgressBar, QListWidget, QDateEdit
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QSize, QDate
 from PyQt6.QtGui import QPalette, QColor, QIcon
 
 # --- Configuration ---
@@ -46,7 +46,8 @@ if not os.path.exists(EXCEL_FOLDER):
                 'Sat': ['Yes', 'No', 'Yes', 'Yes', 'No', 'Yes'],
                 'Notes': ['Team Lead', '', 'Part-time', 'New Hire', '', 'Floater'],
                 'Set Schedule': ['Yes', 'No', 'No', 'No', 'No', 'No'],
-                'Max Per Week': [4, 5, 3, 5, 5, 2]
+                'Max Per Week': [4, 5, 3, 5, 5, 2],
+                'Time Off Dates': ['07/04/2024', '', '12/20/2024-12/28/2024', '01/01/2025', '', '']
             })
             dummy_df.to_excel(dummy_master_path, index=False)
             print(f"Created dummy master file: {dummy_master_path}")
@@ -303,6 +304,25 @@ class EmployeeEditorWindow(QDialog):
         main_layout.addWidget(editor_group)
         main_layout.addStretch()
 
+        # Row 4: Time Off
+        time_off_group = QGroupBox("Time Off Management")
+        time_off_layout = QHBoxLayout(time_off_group)
+
+        self.time_off_list = QListWidget()
+        time_off_layout.addWidget(self.time_off_list)
+
+        time_off_buttons_layout = QVBoxLayout()
+        self.add_time_off_btn = QPushButton("Add")
+        self.edit_time_off_btn = QPushButton("Edit")
+        self.delete_time_off_btn = QPushButton("Delete")
+        time_off_buttons_layout.addWidget(self.add_time_off_btn)
+        time_off_buttons_layout.addWidget(self.edit_time_off_btn)
+        time_off_buttons_layout.addWidget(self.delete_time_off_btn)
+        time_off_buttons_layout.addStretch()
+
+        time_off_layout.addLayout(time_off_buttons_layout)
+        main_layout.addWidget(time_off_group)
+
         # Action Buttons Layout
         action_buttons_layout = QHBoxLayout()
 
@@ -344,6 +364,10 @@ class EmployeeEditorWindow(QDialog):
         self.button_box.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(self.save_changes)
         self.button_box.button(QDialogButtonBox.StandardButton.Close).clicked.connect(self.reject)
 
+        self.add_time_off_btn.clicked.connect(self._add_time_off)
+        self.edit_time_off_btn.clicked.connect(self._edit_time_off)
+        self.delete_time_off_btn.clicked.connect(self._delete_time_off)
+
         self.delete_button.clicked.connect(self.delete_employee)
         self.undo_button.clicked.connect(self.undo_last_delete)
 
@@ -372,7 +396,8 @@ class EmployeeEditorWindow(QDialog):
         for chk in self.availability_boxes.values():
             chk.setChecked(False)
         self.set_schedule_check.setChecked(False)
-        self.max_days_edit.setText("7") # Default to all days
+        self.max_days_edit.setText("4") # Default to 4 days
+        self.time_off_list.clear()
 
     def populate_fields_from_selection(self):
         """Loads the selected employee's data from the master file into the form."""
@@ -389,15 +414,24 @@ class EmployeeEditorWindow(QDialog):
         try:
             df = pd.read_excel(master_employee_file_path)
             emp_data = df[df['Name'] == selected_name].iloc[0]
-
             self.edit_name.setText(emp_data['Name'])
-            self.edit_notes.setText(str(emp_data.get('Notes', '')))
+
+            notes_value = emp_data.get('Notes', '')
+            display_notes = str(notes_value) if pd.notna(notes_value) else ''
+            self.edit_notes.setText(display_notes)
 
             for day, chk in self.availability_boxes.items():
                 chk.setChecked(str(emp_data.get(day, 'No')).lower() == 'yes')
 
             self.set_schedule_check.setChecked(str(emp_data.get('Set Schedule', 'No')).lower() == 'yes')
             self.max_days_edit.setText(str(emp_data.get('Max Per Week', 7)))
+
+            self.time_off_list.clear()
+            time_off_str = emp_data.get('Time Off Dates', '')
+            if pd.notna(time_off_str) and time_off_str:
+                # Split by semicolon and remove any empty strings from extra separators
+                entries = [entry.strip() for entry in time_off_str.split(';') if entry.strip()]
+                self.time_off_list.addItems(entries)
 
         except (IndexError, FileNotFoundError) as e:
             QMessageBox.critical(self, "Error", f"Could not find or load data for '{selected_name}'.\nError: {e}")
@@ -417,10 +451,32 @@ class EmployeeEditorWindow(QDialog):
             QMessageBox.warning(self, "Input Error", "Max Days/Week must be a number between 1 and 7.")
             return
 
+        # Define all columns the app manages and set their expected type to string
+        all_managed_cols = ['Name', 'Notes', 'Set Schedule', 'Max Per Week', 'Time Off Dates'] + DAYS
+        dtype_map = {col: str for col in all_managed_cols}
+
         try:
-            df = pd.read_excel(master_employee_file_path)
-        except FileNotFoundError:
-            df = pd.DataFrame(columns=['Name', 'Notes', 'Set Schedule', 'Max Per Week'] + DAYS)
+            # Read the Excel file, forcing all our columns to be treated as strings
+            df = pd.read_excel(master_employee_file_path, dtype=dtype_map)
+        except (FileNotFoundError, ValueError):
+            # If a file doesn't exist or a column is missing, create a new blank DataFrame
+            df = pd.DataFrame(columns=all_managed_cols)
+            # Ensure the new blank DataFrame also has the correct types
+            df = df.astype(dtype_map)
+
+        # As a safeguard, ensure all managed columns actually exist in the DataFrame
+        for col in all_managed_cols:
+            if col not in df.columns:
+                df[col] = ''
+
+        # Final cast to ensure any newly added columns have the correct string type
+        df = df.astype(dtype_map)
+
+        if 'Time Off Dates' not in df.columns:
+            df['Time Off Dates'] = ''
+        # Explicitly cast the column to 'object' to prevent dtype warnings.
+        # .astype(str) would work but 'object' is more idiomatic for mixed/string data.
+        df['Time Off Dates'] = df['Time Off Dates'].astype('object')
 
         original_name = self.employee_selector_combo.currentText()
         is_add_mode = self.add_new_mode_check.isChecked()
@@ -430,12 +486,17 @@ class EmployeeEditorWindow(QDialog):
             QMessageBox.warning(self, "Input Error", f"An employee named '{name}' already exists.")
             return
 
+        # Get time off data from the list widget
+        time_off_items = [self.time_off_list.item(i).text() for i in range(self.time_off_list.count())]
+        time_off_string = "; ".join(time_off_items)
+
         # Prepare data row
         row_data = {
             'Name': name,
             'Notes': self.edit_notes.text().strip(),
             'Set Schedule': 'Yes' if self.set_schedule_check.isChecked() else 'No',
             'Max Per Week': max_days,
+            'Time Off Dates': time_off_string,
             **{day: ('Yes' if chk.isChecked() else 'No') for day, chk in self.availability_boxes.items()}
         }
 
@@ -559,6 +620,40 @@ class EmployeeEditorWindow(QDialog):
 
         except Exception as e:
             QMessageBox.critical(self, "Restore Error", f"Failed to restore employee:\n{e}")
+
+    def _add_time_off(self):
+        """Opens a dialog to add a new time off entry."""
+        dialog = TimeOffDialog(self)
+        if dialog.exec():
+            date_string = dialog.get_date_string()
+            if date_string:
+                self.time_off_list.addItem(date_string)
+
+    def _edit_time_off(self):
+        """Opens a dialog to edit the selected time off entry."""
+        selected_item = self.time_off_list.currentItem()
+        if not selected_item:
+            QMessageBox.information(self, "No Selection", "Please select a time off entry to edit.")
+            return
+
+        dialog = TimeOffDialog(self, date_string=selected_item.text())
+        if dialog.exec():
+            date_string = dialog.get_date_string()
+            if date_string:
+                selected_item.setText(date_string)
+
+    def _delete_time_off(self):
+        """Deletes the selected time off entry from the list."""
+        selected_item = self.time_off_list.currentItem()
+        if not selected_item:
+            QMessageBox.information(self, "No Selection", "Please select a time off entry to delete.")
+            return
+
+        reply = QMessageBox.question(self, "Confirm Delete", "Are you sure you want to delete this time off entry?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                     QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.time_off_list.takeItem(self.time_off_list.row(selected_item))
 
 # --- Custom Qt Widget for Click/Drag Events ---
 class ClickableLabel(QLabel):
@@ -684,13 +779,82 @@ class ClickableLabel(QLabel):
             success = self.main_window.schedule.remove_employee(self.employee_obj, self.day_key)
             if success:
                 self.main_window.update_all_views()
-                # Re-select the employee to maintain context in the editor
-                self.main_window.select_employee_by_object(self.employee_obj)
+                # The call to select_employee_by_object is now removed.
             else:
                 # This case is unlikely if the UI is correct, but good to have
                 print(f"UI state issue: Could not find {self.employee_obj.name} to remove from {self.day_key}")
         except Exception as e:
             print(f"Error during 'Remove from Schedule' action: {e}")
+
+# --- Time Off Handling ---
+class TimeOffDialog(QDialog):
+    """A dialog for entering or editing a single/ranged time off period."""
+    def __init__(self, parent=None, date_string=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add/Edit Time Off")
+
+        # UI Setup
+        layout = QVBoxLayout(self)
+        grid = QGridLayout()
+
+        self.start_date_edit = QDateEdit()
+        self.start_date_edit.setCalendarPopup(True)
+        self.start_date_edit.setDisplayFormat("MM/dd/yyyy")
+        self.start_date_edit.setDate(QDate.currentDate())
+
+        self.end_date_edit = QDateEdit()
+        self.end_date_edit.setCalendarPopup(True)
+        self.end_date_edit.setDisplayFormat("MM/dd/yyyy")
+        self.end_date_edit.setDate(QDate.currentDate())
+
+        self.single_day_check = QCheckBox("Single Day Event")
+        self.single_day_check.toggled.connect(self.end_date_edit.setDisabled)
+
+        grid.addWidget(QLabel("Start Date:"), 0, 0)
+        grid.addWidget(self.start_date_edit, 0, 1)
+        grid.addWidget(QLabel("End Date:"), 1, 0)
+        grid.addWidget(self.end_date_edit, 1, 1)
+        grid.addWidget(self.single_day_check, 2, 1)
+
+        layout.addLayout(grid)
+
+        # Buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        # Populate fields if editing an existing entry
+        if date_string:
+            self.parse_date_string(date_string)
+
+    def parse_date_string(self, date_string):
+        """Parses a date string (e.g., 'MM/DD/YYYY' or 'MM/DD/YYYY-MM/DD/YYYY') to populate the fields."""
+        try:
+            if '-' in date_string:
+                start_str, end_str = date_string.split('-')
+                self.start_date_edit.setDate(QDate.fromString(start_str.strip(), "MM/dd/yyyy"))
+                self.end_date_edit.setDate(QDate.fromString(end_str.strip(), "MM/dd/yyyy"))
+                self.single_day_check.setChecked(False)
+            else:
+                self.start_date_edit.setDate(QDate.fromString(date_string.strip(), "MM/dd/yyyy"))
+                self.end_date_edit.setDate(self.start_date_edit.date())
+                self.single_day_check.setChecked(True)
+        except Exception as e:
+            print(f"Error parsing date string '{date_string}': {e}")
+
+    def get_date_string(self):
+        """Returns the formatted date string based on the dialog's inputs."""
+        start_date = self.start_date_edit.date().toString("MM/dd/yyyy")
+        if self.single_day_check.isChecked():
+            return start_date
+        else:
+            end_date = self.end_date_edit.date().toString("MM/dd/yyyy")
+            # Ensure start date is not after end date
+            if self.start_date_edit.date() > self.end_date_edit.date():
+                QMessageBox.warning(self, "Date Error", "The end date cannot be before the start date.")
+                return None
+            return f"{start_date}-{end_date}"
 
 # --- Main Application ---
 class SchedulerApp(QMainWindow):
@@ -1154,9 +1318,11 @@ class SchedulerApp(QMainWindow):
         layout.addWidget(QLabel("<b>Name</b>"), 0, 0)
         layout.addWidget(QLabel("<b>Availability</b>"), 0, 1)
         layout.addWidget(QLabel("<b>Notes</b>"), 0, 2)
+        layout.addWidget(QLabel("<b>Time Off Dates</b>"), 0, 3)
         layout.setColumnStretch(0, 2)
         layout.setColumnStretch(1, 3)
-        layout.setColumnStretch(2, 4)
+        layout.setColumnStretch(2, 2)
+        layout.setColumnStretch(3, 3)
 
         self.all_employees_rows = []
         for r in range(self.max_display_rows_per_list):
@@ -1165,14 +1331,16 @@ class SchedulerApp(QMainWindow):
             name_lbl.is_draggable = True
             avail_lbl = QLabel("")
             notes_lbl = QLabel("")
+            time_off_lbl = QLabel("")
             
-            row_widgets = [name_lbl, avail_lbl, notes_lbl]
+            row_widgets = [name_lbl, avail_lbl, notes_lbl, time_off_lbl]
             for i, widget in enumerate(row_widgets):
                 widget.setFixedHeight(22)
                 layout.addWidget(widget, row_idx, i)
             
             self.all_employees_rows.append({
                 'name_lbl': name_lbl, 'avail_lbl': avail_lbl, 'notes_lbl': notes_lbl,
+                'time_off_lbl': time_off_lbl,
                 'conceptual_row_widgets': row_widgets, 'employee': None
             })
         layout.setRowStretch(self.max_display_rows_per_list + 1, 1)
@@ -1258,6 +1426,15 @@ class SchedulerApp(QMainWindow):
         return f"background-color: {colors[index % 2]};"
 
     def update_all_employees_grid(self):
+        try:
+            # Read the file once to get all data
+            df_master = pd.read_excel(master_employee_file_path)
+            # Create a lookup map for the time off dates
+            time_off_map = dict(zip(df_master['Name'], df_master.get('Time Off Dates', '')))
+        except Exception as e:
+            print(f"Could not read master file for time off data: {e}")
+            time_off_map = {}
+
         for i, row_data in enumerate(self.all_employees_rows):
             if i < len(self.employees):
                 emp = self.employees[i]
@@ -1269,6 +1446,9 @@ class SchedulerApp(QMainWindow):
                 
                 notes_display = emp.notes if emp.notes and emp.notes.lower() != 'nan' else ""
                 row_data['notes_lbl'].setText(notes_display)
+
+                time_off_str = time_off_map.get(emp.name, '')
+                row_data['time_off_lbl'].setText(str(time_off_str) if pd.notna(time_off_str) else "")
                 
                 for lbl in row_data['conceptual_row_widgets']:
                     lbl.setStyleSheet(self.get_alternating_row_style(i))
@@ -1534,7 +1714,7 @@ class SchedulerApp(QMainWindow):
         fs_widget = self.final_schedule_frame_container
         if fs_widget.rect().contains(fs_widget.mapFromGlobal(event.globalPosition().toPoint())):
             pos_in_widget = fs_widget.mapFromGlobal(event.globalPosition().toPoint())
-            
+
             # Find column (day)
             col_width = fs_widget.width() / len(DAYS)
             col_index = int(pos_in_widget.x() // col_width)
@@ -1544,8 +1724,8 @@ class SchedulerApp(QMainWindow):
         if target_day:
             if not employee_to_drop.availability.get(target_day, False):
                 reply = QMessageBox.question(self, "Availability Warning",
-                    f"'{employee_to_drop.name}' is not normally available on {target_day}.\nSchedule anyway?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                                             f"'{employee_to_drop.name}' is not normally available on {target_day}.\nSchedule anyway?",
+                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                 if reply == QMessageBox.StandardButton.No:
                     target_day = None # Cancel the drop
 
@@ -1555,20 +1735,8 @@ class SchedulerApp(QMainWindow):
         # Cleanup and refresh
         self.drag_data = {'label_widget': None, 'employee': None}
         self.update_all_views()
-        # Re-select the employee that was just dragged
-        self.select_employee_by_object(employee_to_drop)
-
-    def on_final_schedule_click(self, label_widget):
-        employee = label_widget.employee_obj
-        day = label_widget.day_key
-        if employee and day:
-            reply = QMessageBox.question(self, "Remove Employee",
-                f"Remove '{employee.name}' from {day}?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.Yes:
-                if self.schedule.remove_employee(employee, day):
-                    self.update_all_views()
-                    self.select_employee_by_object(employee) # Reselect after removal
+        # Highlight the employee that was just dragged
+        self.on_schedule_label_highlight_click(employee_to_drop)
 
     def _update_highlight_style(self):
         """
