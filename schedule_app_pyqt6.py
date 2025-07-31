@@ -1,11 +1,12 @@
 import sys
 import os
 import pandas as pd
+import re
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox, QScrollArea, QFrame,
     QMessageBox, QSizePolicy, QMenu, QDialog, QColorDialog, QTabWidget, QGroupBox,
-    QDialogButtonBox, QProgressBar, QListWidget, QDateEdit
+    QDialogButtonBox, QProgressBar, QListWidget, QDateEdit, QCalendarWidget
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QSize, QDate
 from PyQt6.QtGui import QPalette, QColor, QIcon
@@ -89,6 +90,70 @@ class Schedule:
     def is_scheduled_on_any_day(self, emp_to_check: Employee):
         if not isinstance(emp_to_check, Employee): return False
         return any(emp_to_check.name == e.name for day_list in self.scheduled.values() for e in day_list)
+
+# --- Week Selector Dialog ---
+class WeekSelectorDialog(QDialog):
+    """A popup dialog containing just a calendar for selecting a week."""
+    def __init__(self, parent=None, current_date=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.Popup)
+
+        self.selected_date = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(1, 3, 0, 0)
+
+        self.calendar = QCalendarWidget()
+        if current_date:
+            self.calendar.setSelectedDate(current_date)
+
+        self.calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.ISOWeekNumbers)
+
+        self.week_header_label = QLabel("Week", self)
+        self.week_header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        font = self.calendar.font()
+        font.setBold(True)
+        self.week_header_label.setFont(font)
+
+        # Find the navigation bar to dynamically style our label later
+        self.nav_bar = self.calendar.findChild(QWidget, "qt_calendar_navigationbar")
+
+        self.calendar.clicked.connect(self.on_date_selected)
+        layout.addWidget(self.calendar)
+
+    def showEvent(self, event):
+        """Called just before the dialog is shown. Used for final positioning and styling."""
+        super().showEvent(event)
+        self.reposition_and_style_header()
+
+    def reposition_and_style_header(self):
+        """Calculates position and copies style from the calendar's nav bar."""
+        nav_bar_height = 30 # Default height
+        bg_color = "transparent"
+
+        if self.nav_bar:
+            nav_bar_height = self.nav_bar.height()
+            # Extract background-color from the navigation bar's stylesheet
+            match = re.search(r"background-color:\s*([^;}]+)", self.nav_bar.styleSheet())
+            if match:
+                bg_color = match.group(1)
+
+        # Apply the extracted background color to our label for a seamless look
+        self.week_header_label.setStyleSheet(f"background-color: {bg_color};")
+
+        # Fine-tuned position
+        x_offset = 1
+        y_offset = nav_bar_height + 1
+        header_height = 25
+        column_width = 35
+
+        self.week_header_label.setGeometry(x_offset, y_offset, column_width, header_height)
+        self.week_header_label.raise_()
+
+    def on_date_selected(self, date):
+        self.selected_date = date
+        self.accept()
 
 # --- Settings and Target Employees Window ---
 class SettingsWindow(QDialog):
@@ -856,6 +921,58 @@ class TimeOffDialog(QDialog):
                 return None
             return f"{start_date}-{end_date}"
 
+# --- Time Off Manager ---
+class TimeOffManager:
+    """Handles parsing, storing, and checking employee time off dates."""
+    def __init__(self):
+        self.time_off_data = {}
+
+    def load_time_off_data(self, file_path):
+        """Reads the master Excel file and parses all time off dates."""
+        self.time_off_data.clear()
+        try:
+            df = pd.read_excel(file_path)
+            if 'Time Off Dates' not in df.columns:
+                return
+
+            for _, row in df.iterrows():
+                name = row['Name']
+                date_str = row['Time Off Dates']
+                if pd.notna(date_str) and name:
+                    self.time_off_data[name] = self._parse_date_string_list(date_str)
+        except Exception as e:
+            print(f"Error loading time off data: {e}")
+
+    def _parse_date_string_list(self, date_string_list):
+        """Parses a semicolon-separated string of dates/ranges into QDate tuples."""
+        ranges = []
+        entries = [entry.strip() for entry in date_string_list.split(';') if entry.strip()]
+        for entry in entries:
+            try:
+                if '-' in entry:
+                    start_str, end_str = entry.split('-')
+                    start_date = QDate.fromString(start_str.strip(), "MM/dd/yyyy")
+                    end_date = QDate.fromString(end_str.strip(), "MM/dd/yyyy")
+                    if start_date.isValid() and end_date.isValid():
+                        ranges.append((start_date, end_date))
+                else:
+                    single_date = QDate.fromString(entry.strip(), "MM/dd/yyyy")
+                    if single_date.isValid():
+                        ranges.append((single_date, single_date))
+            except Exception as e:
+                print(f"Could not parse date entry '{entry}': {e}")
+        return ranges
+
+    def is_employee_off(self, employee_name, check_date):
+        """Checks if an employee has a specific date off."""
+        if employee_name not in self.time_off_data or not isinstance(check_date, QDate):
+            return False
+
+        for start_date, end_date in self.time_off_data[employee_name]:
+            if start_date <= check_date <= end_date:
+                return True
+        return False
+
 # --- Main Application ---
 class SchedulerApp(QMainWindow):
     def __init__(self):
@@ -865,6 +982,8 @@ class SchedulerApp(QMainWindow):
 
         self.employees = []
         self.schedule = Schedule()
+        self.time_off_manager = TimeOffManager()
+        self.current_week_start_date = QDate()
         self.max_per_day = {day: 35 for day in DAYS}
 
         # self.max_entries = {}
@@ -928,6 +1047,9 @@ class SchedulerApp(QMainWindow):
         # Create UI
         self._setup_ui()
 
+        # Initialize the week selector
+        self._on_week_changed(QDate.currentDate())
+
         # Load data into UI
         self.load_master_employees(initial_employee_df)
 
@@ -939,10 +1061,10 @@ class SchedulerApp(QMainWindow):
                 color: #ffffff;
                 border: none;
             }
-            QMainWindow {
+            QMainWindow, QDialog {
                 background-color: #2b2b2b;
             }
-            QFrame {
+            QFrame, QScrollArea, QListWidget {
                 background-color: #3c3c3c;
                 border-radius: 5px;
             }
@@ -958,11 +1080,20 @@ class SchedulerApp(QMainWindow):
             QPushButton:hover {
                 background-color: #6a6a6a;
             }
-            QLineEdit, QComboBox {
+            QPushButton:pressed {
+                background-color: #4a4a4a;
+            }
+            QLineEdit, QComboBox, QDateEdit {
                 padding: 5px;
                 border: 1px solid #555555;
                 border-radius: 5px;
                 background-color: #3c3c3c;
+            }
+            QDateEdit::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 15px;
+                border-left: 1px solid #555555;
             }
             QComboBox::drop-down {
                 border: none;
@@ -1001,9 +1132,20 @@ class SchedulerApp(QMainWindow):
                 border: 1px solid #555555;
                 border-top: none;
             }
-            QScrollArea {
-                background-color: #3c3c3c;
-                border-radius: 5px;
+            QCalendarWidget QWidget {
+                alternate-background-color: #4a4a4a;
+            }
+            QCalendarWidget QAbstractItemView:enabled {
+                color: #e0e0e0;
+                selection-background-color: #0078d7;
+                selection-color: white;
+            }
+            #qt_calendar_navigationbar {
+                background-color: #555555;
+                color: white;
+            }
+            #qt_calendar_prevmonth, #qt_calendar_nextmonth {
+                color: white;
             }
             QScrollBar:vertical {
                 border: none;
@@ -1199,6 +1341,9 @@ class SchedulerApp(QMainWindow):
         self.auto_schedule_button = QPushButton("Auto Schedule Available Employees")
         self.auto_schedule_button.clicked.connect(self.auto_schedule_available_employees)
 
+        self.week_selector_button = QPushButton("Select a week...")
+        self.week_selector_button.clicked.connect(self._open_week_selector)
+
         self.export_button = QPushButton("Export Schedule")
         self.export_button.clicked.connect(self.export_schedule)
 
@@ -1208,6 +1353,8 @@ class SchedulerApp(QMainWindow):
         layout.addWidget(self.settings_button)
         layout.addWidget(self.manage_employees_button)
         layout.addWidget(self.auto_schedule_button)
+        layout.addWidget(QLabel("Schedule Week:"))
+        layout.addWidget(self.week_selector_button)
         layout.addStretch(1)
         layout.addWidget(self.toggle_theme_button)
         layout.addWidget(self.export_button)
@@ -1369,14 +1516,51 @@ class SchedulerApp(QMainWindow):
         dialog = EmployeeEditorWindow(self, selected_name)
         dialog.exec()
 
+    def _open_week_selector(self):
+        """Opens a popup calendar to select a week."""
+        dialog = WeekSelectorDialog(self, current_date=self.current_week_start_date)
+
+        # Position the popup below the button
+        button_pos = self.week_selector_button.mapToGlobal(self.week_selector_button.rect().bottomLeft())
+        dialog.move(button_pos)
+
+        if dialog.exec():
+            if dialog.selected_date:
+                self._on_week_changed(dialog.selected_date)
+
     def reload_from_master_file(self):
-        """Reloads all employee data from the master file and refreshes the entire UI."""
+        """Reloads all employee data and time off data, then refreshes the entire UI."""
         self.schedule.clear_schedule()
+        self.time_off_manager.load_time_off_data(master_employee_file_path) # <-- ADD THIS
         df, count = self._load_and_count_master_file_data()
         self.load_master_employees(df)
         print("UI reloaded from master file.")
 
-# --- Core Logic Methods (largely adapted from original) ---
+    def _on_week_changed(self, new_date):
+        """Snaps the selected date to the start of the week (Sunday) and refreshes views."""
+        # Day of the week: Monday=1, Sunday=7. We want to find the previous Sunday.
+        day_of_week = new_date.dayOfWeek()
+
+        # If it's already Sunday, we don't need to change it. Otherwise, subtract days.
+        days_to_subtract = 0 if day_of_week == 7 else day_of_week
+
+        start_of_week = new_date.addDays(-days_to_subtract)
+
+        # Update the state and UI only if the week has actually changed
+        if self.current_week_start_date != start_of_week:
+            self.current_week_start_date = start_of_week
+
+            # Update the button text to show the full week range
+            end_of_week = self.current_week_start_date.addDays(6)
+            date_format = "M/d/yyyy"
+            self.week_selector_button.setText(
+                f"{self.current_week_start_date.toString(date_format)} - {end_of_week.toString(date_format)}"
+            )
+
+            print(f"Week changed. New start date: {self.current_week_start_date.toString('yyyy-MM-dd')}")
+            self.reload_from_master_file() # Reload and refresh everything
+
+# --- Core Logic Methods ---
 
     def load_master_employees(self, df_master):
         self.employees.clear()
@@ -1402,7 +1586,10 @@ class SchedulerApp(QMainWindow):
                 if set_schedule_status == 'yes':
                     # Automatically assign the employee to the schedule for available days
                     for day in DAYS:
-                        if emp.availability.get(day, False): # Ensure employee is available on this day
+                        day_index = DAYS.index(day)
+                        actual_date = self.current_week_start_date.addDays(day_index)
+                        is_off = self.time_off_manager.is_employee_off(emp.name, actual_date)
+                        if emp.availability.get(day, False) and not is_off: # Ensure employee is available on this day
                             self.schedule.assign_employee(emp, day)
 
             self.employees.sort(key=lambda e: e.name)
@@ -1447,8 +1634,9 @@ class SchedulerApp(QMainWindow):
                 notes_display = emp.notes if emp.notes and emp.notes.lower() != 'nan' else ""
                 row_data['notes_lbl'].setText(notes_display)
 
-                time_off_str = time_off_map.get(emp.name, '')
-                row_data['time_off_lbl'].setText(str(time_off_str) if pd.notna(time_off_str) else "")
+                raw_time_off_str = time_off_map.get(emp.name, '')
+                formatted_time_off = self._format_time_off_for_display(raw_time_off_str)
+                row_data['time_off_lbl'].setText(formatted_time_off)
                 
                 for lbl in row_data['conceptual_row_widgets']:
                     lbl.setStyleSheet(self.get_alternating_row_style(i))
@@ -1487,10 +1675,13 @@ class SchedulerApp(QMainWindow):
 
         # Populate grid day-by-day
         for day_index, day in enumerate(DAYS):
+            actual_date = self.current_week_start_date.addDays(day_index)
             available_and_unscheduled_for_day = []
             for emp in self.employees:
+                is_off = self.time_off_manager.is_employee_off(emp.name, actual_date)
                 if (
                     emp.availability.get(day, False) and
+                    not is_off and
                     all(e.name != emp.name for e in self.schedule.scheduled[day]) and
                     current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7)
                 ):
@@ -1591,6 +1782,8 @@ class SchedulerApp(QMainWindow):
         employees_added_count = 0
 
         for day in sorted_days:
+            day_index = DAYS.index(day)
+            actual_date = self.current_week_start_date.addDays(day_index)
             needed = max_per_day.get(day, 0) - len(self.schedule.scheduled.get(day, []))
             if needed <= 0:
                 continue
@@ -1605,6 +1798,7 @@ class SchedulerApp(QMainWindow):
                 eligible_pass_1 = [
                     emp for emp in employee_pool
                     if emp.availability.get(day, False)
+                       and not self.time_off_manager.is_employee_off(emp.name, actual_date)
                        and current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7)
                        and emp.name not in [e.name for e in self.schedule.scheduled[day]]
                        # This is the key new condition for Pass 1
@@ -1628,6 +1822,7 @@ class SchedulerApp(QMainWindow):
                 eligible_pass_2 = [
                     emp for emp in employee_pool
                     if emp.availability.get(day, False)
+                       and not self.time_off_manager.is_employee_off(emp.name, actual_date)
                        and current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7)
                        and emp.name not in [e.name for e in self.schedule.scheduled[day]]
                 ]
@@ -1647,6 +1842,7 @@ class SchedulerApp(QMainWindow):
                 eligible_employees = [
                     emp for emp in employee_pool
                     if emp.availability.get(day, False)
+                       and not self.time_off_manager.is_employee_off(emp.name, actual_date)
                        and current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7)
                        and emp.name not in [e.name for e in self.schedule.scheduled.get(day, [])]
                 ]
@@ -1663,6 +1859,41 @@ class SchedulerApp(QMainWindow):
         self.update_all_views()
         QMessageBox.information(self, "Auto-Schedule Complete",
                                 f"Finished auto-scheduling. {employees_added_count} new assignments were made.")
+
+    def _format_time_off_for_display(self, time_off_str):
+        """Converts a raw time off string into a more readable, shorthand format."""
+        if not time_off_str or pd.isna(time_off_str):
+            return ""
+
+        current_year = QDate.currentDate().year()
+
+        def format_date(q_date):
+            """Formats a single QDate object."""
+            if q_date.year() == current_year:
+                return q_date.toString("M/d")
+            else:
+                return q_date.toString("M/d/yy")
+
+        entries = [entry.strip() for entry in time_off_str.split(';') if entry.strip()]
+        formatted_entries = []
+
+        for entry in entries:
+            try:
+                if '-' in entry:
+                    start_str, end_str = entry.split('-')
+                    start_date = QDate.fromString(start_str.strip(), "MM/dd/yyyy")
+                    end_date = QDate.fromString(end_str.strip(), "MM/dd/yyyy")
+                    if start_date.isValid() and end_date.isValid():
+                        formatted_entries.append(f"{format_date(start_date)}-{format_date(end_date)}")
+                else:
+                    single_date = QDate.fromString(entry.strip(), "MM/dd/yyyy")
+                    if single_date.isValid():
+                        formatted_entries.append(format_date(single_date))
+            except Exception:
+                # If parsing fails, just use the original entry
+                formatted_entries.append(entry)
+
+        return "; ".join(formatted_entries)
 
     def on_schedule_label_highlight_click(self, employee_obj):
         """ Handles left-clicks on the final schedule to highlight the employee everywhere. """
@@ -1722,6 +1953,19 @@ class SchedulerApp(QMainWindow):
                 target_day = DAYS[col_index]
 
         if target_day:
+            day_index = DAYS.index(target_day)
+            actual_date = self.current_week_start_date.addDays(day_index)
+            if self.time_off_manager.is_employee_off(employee_to_drop.name, actual_date):
+                reply = QMessageBox.question(self, "Time Off Warning",
+                                             f"'{employee_to_drop.name}' has requested this day off.\n\nSchedule them anyway?",
+                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                             QMessageBox.StandardButton.No)
+                if reply == QMessageBox.StandardButton.No:
+                    # Cleanup and refresh without assigning
+                    self.drag_data = {'label_widget': None, 'employee': None}
+                    self.update_all_views()
+                    return
+
             if not employee_to_drop.availability.get(target_day, False):
                 reply = QMessageBox.question(self, "Availability Warning",
                                              f"'{employee_to_drop.name}' is not normally available on {target_day}.\nSchedule anyway?",
