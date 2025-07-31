@@ -44,7 +44,9 @@ if not os.path.exists(EXCEL_FOLDER):
                 'Thu': ['Yes', 'Yes', 'Yes', 'Yes', 'Yes', 'Yes'],
                 'Fri': ['No', 'Yes', 'No', 'No', 'Yes', 'No'],
                 'Sat': ['Yes', 'No', 'Yes', 'Yes', 'No', 'Yes'],
-                'Notes': ['Team Lead', '', 'Part-time', 'New Hire', '', 'Floater']
+                'Notes': ['Team Lead', '', 'Part-time', 'New Hire', '', 'Floater'],
+                'Set Schedule': ['Yes', 'No', 'No', 'No', 'No', 'No'],
+                'Max Per Week': [4, 5, 3, 5, 5, 2]
             })
             dummy_df.to_excel(dummy_master_path, index=False)
             print(f"Created dummy master file: {dummy_master_path}")
@@ -239,6 +241,324 @@ class SettingsWindow(QDialog):
         """Applies changes and closes the dialog (OK button)."""
         self.apply_changes()
         super().accept()
+
+# --- Employee Editor Window ---
+class EmployeeEditorWindow(QDialog):
+    """A dialog for adding, editing, and deleting employees from the master list."""
+    def __init__(self, main_window, selected_employee_name=None):
+        super().__init__(main_window)
+        self.main_window = main_window
+        self.setWindowTitle("Manage Employees")
+        self.setMinimumSize(550, 400)
+
+        # --- UI Setup ---
+        main_layout = QVBoxLayout(self)
+
+        # Mode selection
+        mode_layout = QHBoxLayout()
+        self.employee_selector_combo = QComboBox()
+        self.add_new_mode_check = QCheckBox("Add New Employee")
+        mode_layout.addWidget(self.employee_selector_combo)
+        mode_layout.addWidget(self.add_new_mode_check)
+        main_layout.addLayout(mode_layout)
+
+        # Editor fields group
+        editor_group = QGroupBox("Employee Details")
+        grid = QGridLayout(editor_group)
+
+        # Row 0: Name
+        grid.addWidget(QLabel("Name:"), 0, 0)
+        self.edit_name = QLineEdit()
+        grid.addWidget(self.edit_name, 0, 1)
+
+        # Row 1: Notes
+        grid.addWidget(QLabel("Notes:"), 1, 0)
+        self.edit_notes = QLineEdit()
+        grid.addWidget(self.edit_notes, 1, 1)
+
+        # Row 2: Availability
+        grid.addWidget(QLabel("Availability:"), 2, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        avail_layout = QHBoxLayout()
+        self.availability_boxes = {}
+        for day in DAYS:
+            chk = QCheckBox(day)
+            self.availability_boxes[day] = chk
+            avail_layout.addWidget(chk)
+        grid.addLayout(avail_layout, 2, 1)
+
+        # Row 3: Other settings
+        grid.addWidget(QLabel("Settings:"), 3, 0)
+        settings_layout = QHBoxLayout()
+        self.set_schedule_check = QCheckBox("Set Schedule")
+        self.set_schedule_check.setToolTip("If checked, this employee is automatically scheduled on all their available days.")
+        self.max_days_edit = QLineEdit()
+        self.max_days_edit.setPlaceholderText("e.g., 5")
+        self.max_days_edit.setFixedWidth(60)
+        settings_layout.addWidget(self.set_schedule_check)
+        settings_layout.addWidget(QLabel("Max Days/Week:"))
+        settings_layout.addWidget(self.max_days_edit)
+        settings_layout.addStretch()
+        grid.addLayout(settings_layout, 3, 1)
+
+        main_layout.addWidget(editor_group)
+        main_layout.addStretch()
+
+        # Action Buttons Layout
+        action_buttons_layout = QHBoxLayout()
+
+        self.delete_button = QPushButton("Delete Employee")
+        self.delete_button.setStyleSheet("""
+            QPushButton {
+                background-color: #cd5c5c;
+                color: white;
+                font-weight: bold;
+                border: none;
+                padding: 5px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #b02a2a;
+            }
+            QPushButton:pressed {
+                background-color: #902a2a;
+            }
+        """)
+        self.undo_button = QPushButton("Undo Last Delete")
+
+        # Dialog Buttons (Apply/Close)
+        self.button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Apply | QDialogButtonBox.StandardButton.Close
+        )
+
+        action_buttons_layout.addWidget(self.delete_button)
+        action_buttons_layout.addWidget(self.undo_button)
+        action_buttons_layout.addStretch()
+        action_buttons_layout.addWidget(self.button_box)
+
+        main_layout.addLayout(action_buttons_layout)
+
+        # --- Connections ---
+        self.add_new_mode_check.toggled.connect(self.toggle_mode)
+        self.employee_selector_combo.currentIndexChanged.connect(self.populate_fields_from_selection)
+
+        self.button_box.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(self.save_changes)
+        self.button_box.button(QDialogButtonBox.StandardButton.Close).clicked.connect(self.reject)
+
+        self.delete_button.clicked.connect(self.delete_employee)
+        self.undo_button.clicked.connect(self.undo_last_delete)
+
+        # --- Initial State ---
+        self._refresh_employee_list(select_name=selected_employee_name)
+        self.toggle_mode(self.add_new_mode_check.isChecked())
+
+    def toggle_mode(self, is_add_mode):
+        """Switches the UI between 'Add New' and 'Edit Existing' modes."""
+        self.employee_selector_combo.setDisabled(is_add_mode)
+        self.edit_name.setReadOnly(not is_add_mode)
+        self.delete_button.setDisabled(is_add_mode or self.employee_selector_combo.currentIndex() == 0)
+
+        if is_add_mode:
+            self.setWindowTitle("Add New Employee")
+            self.clear_fields()
+            self.edit_name.setFocus()
+        else:
+            self.setWindowTitle("Edit Employee")
+            self.populate_fields_from_selection()
+
+    def clear_fields(self):
+        """Resets all input fields to their default state."""
+        self.edit_name.clear()
+        self.edit_notes.clear()
+        for chk in self.availability_boxes.values():
+            chk.setChecked(False)
+        self.set_schedule_check.setChecked(False)
+        self.max_days_edit.setText("7") # Default to all days
+
+    def populate_fields_from_selection(self):
+        """Loads the selected employee's data from the master file into the form."""
+        if self.add_new_mode_check.isChecked():
+            return
+
+        selected_name = self.employee_selector_combo.currentText()
+        self.delete_button.setDisabled(self.employee_selector_combo.currentIndex() == 0)
+
+        if self.employee_selector_combo.currentIndex() == 0:
+            self.clear_fields()
+            return
+
+        try:
+            df = pd.read_excel(master_employee_file_path)
+            emp_data = df[df['Name'] == selected_name].iloc[0]
+
+            self.edit_name.setText(emp_data['Name'])
+            self.edit_notes.setText(str(emp_data.get('Notes', '')))
+
+            for day, chk in self.availability_boxes.items():
+                chk.setChecked(str(emp_data.get(day, 'No')).lower() == 'yes')
+
+            self.set_schedule_check.setChecked(str(emp_data.get('Set Schedule', 'No')).lower() == 'yes')
+            self.max_days_edit.setText(str(emp_data.get('Max Per Week', 7)))
+
+        except (IndexError, FileNotFoundError) as e:
+            QMessageBox.critical(self, "Error", f"Could not find or load data for '{selected_name}'.\nError: {e}")
+            self.clear_fields()
+
+    def save_changes(self): # Renamed from save_and_close
+        """Validates input and saves changes (add or update) to the master Excel file."""
+        name = self.edit_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Input Error", "Employee name cannot be empty.")
+            return
+
+        try:
+            max_days = int(self.max_days_edit.text())
+            if not (1 <= max_days <= 7): raise ValueError
+        except (ValueError, TypeError):
+            QMessageBox.warning(self, "Input Error", "Max Days/Week must be a number between 1 and 7.")
+            return
+
+        try:
+            df = pd.read_excel(master_employee_file_path)
+        except FileNotFoundError:
+            df = pd.DataFrame(columns=['Name', 'Notes', 'Set Schedule', 'Max Per Week'] + DAYS)
+
+        original_name = self.employee_selector_combo.currentText()
+        is_add_mode = self.add_new_mode_check.isChecked()
+
+        # Check for name collision on add OR rename
+        if (is_add_mode or (not is_add_mode and name != original_name)) and name in df['Name'].values:
+            QMessageBox.warning(self, "Input Error", f"An employee named '{name}' already exists.")
+            return
+
+        # Prepare data row
+        row_data = {
+            'Name': name,
+            'Notes': self.edit_notes.text().strip(),
+            'Set Schedule': 'Yes' if self.set_schedule_check.isChecked() else 'No',
+            'Max Per Week': max_days,
+            **{day: ('Yes' if chk.isChecked() else 'No') for day, chk in self.availability_boxes.items()}
+        }
+
+        if is_add_mode:
+            new_row_df = pd.DataFrame([row_data])
+            df = pd.concat([df, new_row_df], ignore_index=True)
+        else:
+            idx = df.index[df['Name'] == original_name].tolist()
+            if not idx:
+                QMessageBox.critical(self, "Save Error", f"Could not find '{original_name}' to update.")
+                return
+
+            # Use .loc to update all columns from the dictionary
+            for col, value in row_data.items():
+                df.loc[idx[0], col] = value
+
+        df.to_excel(master_employee_file_path, index=False)
+        QMessageBox.information(self, "Success", f"Changes for '{name}' have been saved.")
+
+        # --- Refresh everything but keep window open ---
+        self.main_window.reload_from_master_file()
+        self._refresh_employee_list(select_name=name)
+        # Note: self.accept() is REMOVED
+
+    def delete_employee(self):
+        """Moves the selected employee to the recently_deleted file."""
+        name_to_delete = self.employee_selector_combo.currentText()
+        if not name_to_delete or self.employee_selector_combo.currentIndex() == 0:
+            return
+
+        reply = QMessageBox.question(self, "Confirm Deletion",
+                                     f"Are you sure you want to delete '{name_to_delete}'?\nThis can be undone with the 'Undo Last Delete' button.",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                     QMessageBox.StandardButton.No)
+
+        if reply == QMessageBox.StandardButton.No:
+            return
+
+        try:
+            # 1. Read master list
+            df_master = pd.read_excel(master_employee_file_path)
+            row_to_delete = df_master[df_master['Name'] == name_to_delete]
+
+            if row_to_delete.empty:
+                QMessageBox.critical(self, "Error", f"Could not find '{name_to_delete}' in the master file.")
+                return
+
+            # 2. Add to recently_deleted file
+            deleted_file_path = os.path.join(EXCEL_FOLDER, RECENTLY_DELETED_FILE)
+            try:
+                df_deleted = pd.read_excel(deleted_file_path)
+            except FileNotFoundError:
+                df_deleted = pd.DataFrame(columns=df_master.columns)
+
+            df_deleted = pd.concat([df_deleted, row_to_delete], ignore_index=True)
+            df_deleted.to_excel(deleted_file_path, index=False)
+
+            # 3. Remove from master list
+            df_master = df_master[df_master['Name'] != name_to_delete]
+            df_master.to_excel(master_employee_file_path, index=False)
+
+            QMessageBox.information(self, "Success", f"Employee '{name_to_delete}' has been deleted.")
+
+            # --- Refresh everything but keep window open ---
+            self.main_window.reload_from_master_file()
+            self._refresh_employee_list() # Resets to "Select Employee..."
+
+        except Exception as e:
+            QMessageBox.critical(self, "Delete Error", f"Could not delete employee:\n{e}")
+
+    def _refresh_employee_list(self, select_name=None):
+        """Reloads the employee names from the main window into the combo box."""
+        current_selection = select_name or self.employee_selector_combo.currentText()
+
+        self.employee_selector_combo.blockSignals(True)
+        self.employee_selector_combo.clear()
+
+        all_names = sorted([e.name for e in self.main_window.employees])
+        self.employee_selector_combo.addItems(["Select Employee..."] + all_names)
+
+        if current_selection in all_names:
+            self.employee_selector_combo.setCurrentText(current_selection)
+        else:
+            self.employee_selector_combo.setCurrentIndex(0)
+
+        self.employee_selector_combo.blockSignals(False)
+        self.populate_fields_from_selection()
+
+    def undo_last_delete(self):
+        """Restores the most recently deleted employee from the backup file."""
+        deleted_file_path = os.path.join(EXCEL_FOLDER, RECENTLY_DELETED_FILE)
+        if not os.path.exists(deleted_file_path):
+            QMessageBox.information(self, "Undo", "No recently deleted employees to restore.")
+            return
+
+        try:
+            df_deleted = pd.read_excel(deleted_file_path)
+            if df_deleted.empty:
+                QMessageBox.information(self, "Undo", "The deleted employees list is empty.")
+                return
+
+            last_deleted_row = df_deleted.iloc[-1:].copy()
+            restored_name = last_deleted_row.iloc[0]['Name']
+
+            df_master = pd.read_excel(master_employee_file_path)
+            if restored_name in df_master['Name'].values:
+                QMessageBox.critical(self, "Restore Error", f"Cannot restore '{restored_name}'. An employee with this name already exists.")
+                return
+
+            # Add the restored employee back to the master list
+            df_master = pd.concat([df_master, last_deleted_row], ignore_index=True)
+            df_master.to_excel(master_employee_file_path, index=False)
+
+            # Remove the entry from the deleted list
+            df_deleted = df_deleted.iloc[:-1]
+            df_deleted.to_excel(deleted_file_path, index=False)
+
+            QMessageBox.information(self, "Success", f"Restored '{restored_name}' to the master list.")
+            self.main_window.reload_from_master_file()
+            self._refresh_employee_list(select_name=restored_name)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Restore Error", f"Failed to restore employee:\n{e}")
 
 # --- Custom Qt Widget for Click/Drag Events ---
 class ClickableLabel(QLabel):
@@ -483,6 +803,40 @@ class SchedulerApp(QMainWindow):
             QComboBox::drop-down {
                 border: none;
             }
+            QCheckBox::indicator {
+                width: 13px;
+                height: 13px;
+            }
+            QGroupBox {
+                border: 1px solid #555555;
+                border-radius: 5px;
+                margin-top: 15px; /* Create space for the title */
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 5px;
+                color: #dddddd;
+                background-color: #2b2b2b; /* Match window background */
+            }
+            QTabBar::tab {
+                background-color: #3c3c3c;
+                padding: 8px 15px;
+                border: 1px solid #555555;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+            QTabBar::tab:hover {
+                background-color: #4c4c4c;
+            }
+            QTabBar::tab:selected {
+                background-color: #2b2b2b;
+            }
+            QTabWidget::pane {
+                border: 1px solid #555555;
+                border-top: none;
+            }
             QScrollArea {
                 background-color: #3c3c3c;
                 border-radius: 5px;
@@ -671,10 +1025,12 @@ class SchedulerApp(QMainWindow):
 
         self.settings_button = QPushButton("⚙️ Settings")
         self.settings_button.clicked.connect(self._open_settings_window)
-        # Make the icon a bit larger for visibility
         font = self.settings_button.font()
         font.setPointSize(11)
         self.settings_button.setFont(font)
+
+        self.manage_employees_button = QPushButton("🧑‍💼 Manage Employees")
+        self.manage_employees_button.clicked.connect(self._open_employee_editor)
 
         self.auto_schedule_button = QPushButton("Auto Schedule Available Employees")
         self.auto_schedule_button.clicked.connect(self.auto_schedule_available_employees)
@@ -686,6 +1042,7 @@ class SchedulerApp(QMainWindow):
         self.toggle_theme_button.toggled.connect(self.toggle_theme)
 
         layout.addWidget(self.settings_button)
+        layout.addWidget(self.manage_employees_button)
         layout.addWidget(self.auto_schedule_button)
         layout.addStretch(1)
         layout.addWidget(self.toggle_theme_button)
@@ -732,102 +1089,9 @@ class SchedulerApp(QMainWindow):
         all_employees_layout.addWidget(self.all_employees_scroll_area)
         self._build_all_employees_grid()
 
-        # Editor
-        edit_info_frame = self._create_editor_frame()
-
         layout.addWidget(unassigned_frame, 1) # Stretch
         layout.addWidget(all_employees_frame, 1) # Stretch
-        layout.addWidget(edit_info_frame)
         return layout
-
-    def _create_editor_frame(self):
-        frame = QFrame()
-        frame.setFrameShape(QFrame.Shape.StyledPanel)
-        main_layout = QVBoxLayout(frame)
-        
-        # Name and Notes
-        name_notes_layout = QHBoxLayout()
-        self.edit_name = QLineEdit()
-        self.edit_name.setPlaceholderText("Name")
-        self.edit_notes = QLineEdit()
-        self.edit_notes.setPlaceholderText("Notes")
-        name_notes_layout.addWidget(self.edit_name)
-        name_notes_layout.addWidget(self.edit_notes)
-        
-        # Availability Checkboxes
-        availability_layout = QHBoxLayout()
-        self.availability_boxes = {}
-        for day in DAYS:
-            chk = QCheckBox(day)
-            checkbox_style = """
-                QCheckBox {
-                    background-color: transparent; /* Key: Make the entire QCheckBox widget background transparent */
-                    border: none;                   /* Remove any border on the QCheckBox widget itself */
-                    margin-left: 4px;               /* Push the QCheckBox widget slightly right */
-                    padding: 0;                     /* Remove default internal padding of the QCheckBox */
-                    
-                    /* Ensure label color inherits properly */
-                    color: inherit; 
-                }
-                QCheckBox::indicator {
-                    /* Style the actual checkable box (the indicator) */
-                    /* This is what ensures the box itself is visible and has a consistent look */
-                    border: 1px solid gray;        /* Add a consistent border to the indicator */
-                    border-radius: 3px;            /* Slightly rounded corners */
-                    width: 14px;                   /* Fixed size for consistency */
-                    height: 14px;                  /* Fixed size for consistency */
-                    background-color: transparent; /* Ensure the indicator's own background is transparent */
-                    
-                    /* When checked, Qt will draw the checkmark inside this styled indicator */
-                }
-                QCheckBox::indicator:checked {
-                    /* Style for the indicator when it is checked */
-                    background-color: #4CAF50; /* Green for checked, a common UI color */
-                    border-color: #388E3C;     /* Darker green border for checked */
-                    /* If you want the checkmark to be white: */
-                    /* This is tricky and platform dependent. Often, the system draws it. */
-                    /* If you must force a color, it often involves custom painter, which is complex. */
-                    /* For now, let's rely on the default checkmark color or ensure good contrast. */
-                }
-
-                /* Hover effects are good for usability */
-                QCheckBox:hover {
-                    background-color: rgba(128, 128, 128, 30); /* Subtle background tint on hover */
-                }
-                QCheckBox::indicator:hover {
-                    border-color: #555; /* Slightly darker border on hover */
-                }
-                QCheckBox::indicator:checked:hover {
-                    background-color: #66BB6A; /* Lighter green on hover when checked */
-                    border-color: #4CAF50;
-                }
-            """
-            chk.setStyleSheet(checkbox_style)
-            self.availability_boxes[day] = chk
-            availability_layout.addWidget(chk)
-            availability_layout.addStretch()
-
-        # Buttons
-        button_layout = QHBoxLayout()
-        self.add_emp_button = QPushButton("Add New Employee")
-        self.add_emp_button.clicked.connect(self.add_new_employee)
-        self.update_emp_button = QPushButton("Update Selected Employee")
-        self.update_emp_button.clicked.connect(self.update_employee)
-        self.del_curr_emp_button = QPushButton("Delete Selected Employee")
-        self.del_curr_emp_button.clicked.connect(self.del_curr_employee)
-        self.undo_del_button = QPushButton("Undo Delete")
-        self.undo_del_button.clicked.connect(self.undo_del_employee)
-        button_layout.addStretch()
-        button_layout.addWidget(self.add_emp_button)
-        button_layout.addWidget(self.update_emp_button)
-        button_layout.addWidget(self.del_curr_emp_button)
-        button_layout.addWidget(self.undo_del_button)
-        button_layout.addStretch()
-
-        main_layout.addLayout(name_notes_layout)
-        main_layout.addLayout(availability_layout)
-        main_layout.addLayout(button_layout)
-        return frame
 
     def _build_schedule_preview(self, parent_container):
         self.schedule_layout = QGridLayout(parent_container)
@@ -897,11 +1161,8 @@ class SchedulerApp(QMainWindow):
         self.all_employees_rows = []
         for r in range(self.max_display_rows_per_list):
             row_idx = r + 1
-            name_lbl = ClickableLabel(self, "")
-            # This is where we enable click-to-select functionality
-            name_lbl.mousePressEvent = lambda event, emp_row=r: self.on_employee_label_click(emp_row)
+            name_lbl = ClickableLabel(self, "") # Still a ClickableLabel for drag-and-drop
             name_lbl.is_draggable = True
-
             avail_lbl = QLabel("")
             notes_lbl = QLabel("")
             
@@ -932,6 +1193,20 @@ class SchedulerApp(QMainWindow):
                 self.unassigned_labels[day].append(lbl)
             layout.setColumnStretch(c, 1)
         layout.setRowStretch(MAX_ROWS_UNASSIGNED_PER_DAY_COLUMN + 1, 1)
+
+    def _open_employee_editor(self):
+        """Opens the employee editor dialog."""
+        # Pass the name of the currently highlighted employee, if any
+        selected_name = self.highlighted_employee_obj.name if self.highlighted_employee_obj else None
+        dialog = EmployeeEditorWindow(self, selected_name)
+        dialog.exec()
+
+    def reload_from_master_file(self):
+        """Reloads all employee data from the master file and refreshes the entire UI."""
+        self.schedule.clear_schedule()
+        df, count = self._load_and_count_master_file_data()
+        self.load_master_employees(df)
+        print("UI reloaded from master file.")
 
 # --- Core Logic Methods (largely adapted from original) ---
 
@@ -971,22 +1246,9 @@ class SchedulerApp(QMainWindow):
         if not self.employees: self.clear_editor_fields()
 
     def update_all_views(self):
-        # Store selected employee to re-select after update
-        current_selected_name = self.selected_employee_obj.name if self.selected_employee_obj else None
-        
         self.update_all_employees_grid()
         self.update_unassigned_grid()
         self.update_final_schedule_display()
-        
-        self.deselect_employee() # Clears visual selection
-        if current_selected_name:
-            emp_to_reselect = next((e for e in self.employees if e.name == current_selected_name), None)
-            if emp_to_reselect:
-                self.select_employee_by_object(emp_to_reselect)
-            else:
-                self.clear_editor_fields()
-        else:
-            self.clear_editor_fields()
 
     def get_alternating_row_style(self, index):
         if not self.is_dark_mode:
@@ -1016,7 +1278,6 @@ class SchedulerApp(QMainWindow):
                 for lbl in row_data['conceptual_row_widgets']:
                     lbl.setText("")
                     lbl.hide()
-        self.highlight_selected_row()
 
     def update_unassigned_grid(self):
         """
@@ -1223,58 +1484,6 @@ class SchedulerApp(QMainWindow):
         QMessageBox.information(self, "Auto-Schedule Complete",
                                 f"Finished auto-scheduling. {employees_added_count} new assignments were made.")
 
-    def on_employee_label_click(self, row_index):
-        if row_index < len(self.all_employees_rows):
-            employee = self.all_employees_rows[row_index].get('employee')
-            if employee:
-                if self.selected_employee_obj == employee:
-                    self.deselect_employee()
-                    self.clear_editor_fields()
-                else:
-                    self.select_employee_by_object(employee)
-
-    def select_employee_by_object(self, employee):
-        self.deselect_employee()
-        self.selected_employee_obj = employee
-        
-        self.edit_name.setText(employee.name)
-        self.edit_name.setEnabled(False) # Prevent editing name
-        self.edit_notes.setText(employee.notes)
-        notes_display = employee.notes if employee.notes and employee.notes.lower() != 'nan' else ""
-        self.edit_notes.setText(notes_display) 
-        for day, chk in self.availability_boxes.items():
-            chk.setChecked(employee.availability.get(day, False))
-
-        self.highlight_selected_row()
-
-    def deselect_employee(self):
-        if self.selected_row_widgets:
-            # Find index to restore correct alternating color
-            try:
-                idx = self.employees.index(self.selected_employee_obj)
-                style = self.get_alternating_row_style(idx)
-                for w in self.selected_row_widgets:
-                    w.setStyleSheet(style)
-            except (ValueError, AttributeError):
-                pass # Employee might have been removed
-
-        self.selected_employee_obj = None
-        self.selected_row_widgets = None
-        if hasattr(self, 'edit_name'):
-            self.edit_name.setEnabled(True)
-
-    def highlight_selected_row(self):
-        if self.selected_employee_obj:
-            try:
-                idx = self.employees.index(self.selected_employee_obj)
-                if idx < len(self.all_employees_rows):
-                    row_data = self.all_employees_rows[idx]
-                    for w in row_data['conceptual_row_widgets']:
-                        w.setStyleSheet(self.highlight_style)
-                    self.selected_row_widgets = row_data['conceptual_row_widgets']
-            except ValueError:
-                self.selected_row_widgets = None
-
     def on_schedule_label_highlight_click(self, employee_obj):
         """ Handles left-clicks on the final schedule to highlight the employee everywhere. """
         if self.highlighted_employee_obj == employee_obj:
@@ -1287,230 +1496,6 @@ class SchedulerApp(QMainWindow):
         # Redraw the two grids that can show the highlight.
         self.update_final_schedule_display()
         self.update_unassigned_grid()
-
-    def clear_editor_fields(self):
-        self.edit_name.setEnabled(True)
-        self.edit_name.clear()
-        self.edit_notes.clear()
-        for chk in self.availability_boxes.values():
-            chk.setChecked(False)
-
-    def add_new_employee(self):
-        name = self.edit_name.text().strip()
-        if not name:
-            QMessageBox.critical(self, "Input Error", "Employee name cannot be empty.")
-            return
-        if any(e.name.lower() == name.lower() for e in self.employees):
-            QMessageBox.critical(self, "Input Error", f"Employee '{name}' already exists.")
-            return
-
-        notes = self.edit_notes.text().strip()
-        availability = {day: chk.isChecked() for day, chk in self.availability_boxes.items()}
-        new_emp = Employee(name, availability, notes)
-        
-        self.employees.append(new_emp)
-        self.employees.sort(key=lambda e: e.name)
-        self.save_master_list()
-        self.update_all_views()
-        self.clear_editor_fields()
-        QMessageBox.information(self, "Success", f"Employee '{name}' added.")
-
-    def update_employee(self):
-        if not self.selected_employee_obj:
-            QMessageBox.warning(self, "Update Error", "No employee selected.")
-            return
-
-        # Update the in-memory employee object first
-        emp = self.selected_employee_obj
-        emp.notes = self.edit_notes.text().strip()
-        emp.availability = {day: chk.isChecked() for day, chk in self.availability_boxes.items()}
-
-        # Directly update the Excel file to preserve order and other columns ---
-        try:
-            # Read the master file into a DataFrame
-            df = pd.read_excel(master_employee_file_path)
-
-            # Find the index of the employee to update by name
-            idx_list = df.index[df['Name'] == emp.name].tolist()
-            if not idx_list:
-                QMessageBox.critical(self, "Save Error", f"Could not find '{emp.name}' in the master file to update. It may have been renamed or deleted externally.")
-                return
-
-            idx = idx_list[0] # Get the integer index
-
-            # Update the DataFrame at the specific row for Notes and availability days
-            df.loc[idx, 'Notes'] = emp.notes
-            for day, available in emp.availability.items():
-                if day in df.columns: # Only update columns that exist in the file
-                    df.loc[idx, day] = 'Yes' if available else 'No'
-
-            # Save the entire modified DataFrame back to the Excel file
-            # This preserves row order, other columns (like 'Set Schedule'), and formatting
-            df.to_excel(master_employee_file_path, index=False)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Save Error", f"Failed to update master list file:\n{e}")
-            return
-
-        # Refresh the UI to reflect the changes
-        self.update_all_views()
-        QMessageBox.information(self, "Success", f"Employee '{emp.name}' updated in the master file.")
-
-    def del_curr_employee(self):
-        if not self.selected_employee_obj:
-            QMessageBox.warning(self, "Delete Error", "No employee selected to delete.")
-            return
-
-        emp_to_delete = self.selected_employee_obj
-        
-        reply = QMessageBox.question(self, "Confirm Deletion",
-            f"Are you sure you want to delete '{emp_to_delete.name}'?\nThis can be undone with the 'Undo Delete' button.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-
-        if reply == QMessageBox.StandardButton.No:
-            return
-
-        # --- Proceed with deletion ---
-        # 1. Prepare deleted employee data
-        deleted_emp_data = {
-            'Name': emp_to_delete.name,
-            'Notes': emp_to_delete.notes,
-            **{d: ('Yes' if emp_to_delete.availability.get(d) else 'No') for d in DAYS}
-        }
-        
-        # 2. Load or create the recently_deleted file
-        deleted_file_path = os.path.join(EXCEL_FOLDER, RECENTLY_DELETED_FILE)
-        try:
-            if os.path.exists(deleted_file_path):
-                df_deleted = pd.read_excel(deleted_file_path)
-            else:
-                df_deleted = pd.DataFrame(columns=['Name'] + DAYS + ['Notes'])
-            
-            # 3. Append and save
-            new_row_df = pd.DataFrame([deleted_emp_data])
-            df_deleted = pd.concat([df_deleted, new_row_df], ignore_index=True)
-            df_deleted.to_excel(deleted_file_path, index=False)
-
-        except Exception as e:
-            QMessageBox.critical(self, "File Error", f"Could not update the deleted employees list:\n{e}")
-            return
-
-        # 4. Remove from main employee list
-        self.employees.remove(emp_to_delete)
-        
-        # 5. Remove from any scheduled day
-        for day in DAYS:
-            self.schedule.remove_employee(emp_to_delete, day)
-
-        # 6. Save the master list
-        self.save_master_list()
-        
-        # 7. Update UI
-        self.deselect_employee()
-        self.clear_editor_fields()
-        self.update_all_views()
-        
-        QMessageBox.information(self, "Success", f"Employee '{emp_to_delete.name}' has been deleted.")
-
-    def undo_del_employee(self):
-        deleted_file_path = os.path.join(EXCEL_FOLDER, RECENTLY_DELETED_FILE)
-
-        # 1. Check if the file exists and is not empty
-        if not os.path.exists(deleted_file_path):
-            QMessageBox.information(self, "Undo Delete", "No recently deleted employees to restore.")
-            return
-        
-        try:
-            df_deleted = pd.read_excel(deleted_file_path)
-            if df_deleted.empty:
-                QMessageBox.information(self, "Undo Delete", "The deleted employees list is empty.")
-                return
-
-            # 2. Get the last deleted employee (last row)
-            last_deleted_series = df_deleted.iloc[-1]
-            
-            # 3. Check for name collision
-            restored_name = last_deleted_series['Name']
-            if any(e.name.lower() == restored_name.lower() for e in self.employees):
-                QMessageBox.critical(self, "Restore Error", f"An employee named '{restored_name}' already exists in the master list.")
-                return
-
-            # 4. Convert row back to Employee object
-            availability = {day: str(last_deleted_series.get(day, '')).strip().lower() == 'yes' for day in DAYS}
-            notes = str(last_deleted_series.get('Notes', '')).strip()
-            restored_emp = Employee(restored_name, availability, notes)
-            
-            # 5. Add back to main list and sort
-            self.employees.append(restored_emp)
-            self.employees.sort(key=lambda e: e.name)
-            
-            # 6. Remove from deleted list and save
-            df_deleted = df_deleted.iloc[:-1] # Drop the last row
-            df_deleted.to_excel(deleted_file_path, index=False)
-
-            # 7. Save the master list
-            self.save_master_list()
-            
-            # 8. Update UI
-            self.update_all_views()
-            
-            QMessageBox.information(self, "Success", f"Restored '{restored_name}' to the master list.")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Restore Error", f"Failed to restore employee:\n{e}")
-
-    def save_master_list(self):
-        """
-        Saves the current state of self.employees to the master Excel file.
-        This version preserves column order and extra columns (e.g., 'Set Schedule')
-        by reading the original file first. It's used for Add/Delete/Undo operations.
-        """
-        try:
-            original_data = {}
-            all_columns = ['Name'] + DAYS + ['Notes']
-
-            # 1. Try to read the original file to get its structure and extra data
-            try:
-                df_orig = pd.read_excel(master_employee_file_path)
-                all_columns = df_orig.columns.tolist() # Preserve original column order
-                app_managed_cols = ['Name'] + DAYS + ['Notes']
-                extra_cols = [c for c in all_columns if c not in app_managed_cols]
-
-                if extra_cols:
-                    # Create a lookup dictionary for the extra data of each employee
-                    for _, row in df_orig.iterrows():
-                        if 'Name' in row and pd.notna(row['Name']):
-                            original_data[row['Name']] = {col: row[col] for col in extra_cols}
-            except Exception:
-                # File might not exist or is malformed, proceed with the default structure
-                pass
-
-            # 2. Build the list of data rows from the current in-memory employee list
-            data_to_save = []
-            for e in self.employees:
-                row_data = {
-                    'Name': e.name,
-                    'Notes': e.notes,
-                    **{d: ('Yes' if e.availability.get(d, False) else 'No') for d in DAYS}
-                }
-                # If we have stored extra data for this employee, add it back in
-                if e.name in original_data:
-                    row_data.update(original_data[e.name])
-                data_to_save.append(row_data)
-
-            # 3. Create the final DataFrame
-            df_final = pd.DataFrame(data_to_save)
-
-            # 4. Ensure all original columns are present and in the correct order
-            # This prevents columns from being dropped or reordered
-            df_final = df_final.reindex(columns=all_columns, fill_value='')
-
-            # 5. Save to the master file, overwriting it with the preserved structure
-            df_final.to_excel(master_employee_file_path, index=False)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Save Error", f"Failed to save master list:\n{e}")
 
     def export_schedule(self):
         if not any(self.schedule.scheduled.values()):
@@ -1605,6 +1590,7 @@ class SchedulerApp(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyle("Breeze")
     window = SchedulerApp()
     window.show()
     sys.exit(app.exec())
