@@ -4,8 +4,8 @@
             "light": "#b7e3ff",
             "dark": "#008df1"
         },
-        "header_font_size": 11,
-        "body_font_size": 10,
+        "header_font_size": 14,
+        "body_font_size": 9,
         "light_header_colors": {
             "empty": "#f0f0f0",
             "warning": "indianred",

@@ -4,8 +4,8 @@
             "light": "#b7e3ff",
             "dark": "#008df1"
         },
-        "header_font_size": 11,
-        "body_font_size": 10,
+        "header_font_size": 12,
+        "body_font_size": 11,
         "light_header_colors": {
             "empty": "#f0f0f0",
             "warning": "indianred",
@@ -24,12 +24,12 @@
         "font_size_content": 10
     },
     "max_per_day": {
-        "Sun": 35,
+        "Sun": 30,
         "Mon": 35,
         "Tue": 35,
         "Wed": 35,
         "Thu": 35,
         "Fri": 35,
-        "Sat": 35
+        "Sat": 30
     }
 }

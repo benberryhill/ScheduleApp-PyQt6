@@ -223,7 +223,7 @@ class SettingsWindow(QDialog):
         font_layout = QGridLayout(font_group)
 
         # --- Header Font Slider ---
-        font_layout.addWidget(QLabel("Headers:"), 0, 0)
+        font_layout.addWidget(QLabel("Headers and Buttons:"), 0, 0)
 
         self.header_font_slider = QSlider(Qt.Orientation.Horizontal)
         self.header_font_slider.setRange(8, 14)
@@ -1160,6 +1160,8 @@ class SchedulerApp(QMainWindow):
         self.highlighted_employee_obj = None # To track the employee for grid highlighting
 
         self.grid_header_widgets = []
+        self.day_column_header_widgets = []
+        self.table_column_header_widgets = []
         self.employee_progress_styles = {}
         self.no_set_days_rows = []
 
@@ -1189,12 +1191,29 @@ class SchedulerApp(QMainWindow):
         # Now, load settings from file, which will overwrite the defaults
         self.load_settings()
 
+        # Apply the loaded palette settings immediately so they are used for initial style generation.
+        # This ensures user-defined highlight colors are active on startup.
+        palette = self.palette()
+        # On startup, we are always in light mode.
+        initial_theme_mode = 'light'
+        highlight_color_hex = self.theme_config['highlight_colors'][initial_theme_mode]
+        highlight_color = QColor(highlight_color_hex)
+        palette.setColor(QPalette.ColorRole.Highlight, highlight_color)
+        
+        # Set the text color for the highlight based on the highlight color's brightness
+        text_color = Qt.GlobalColor.white if highlight_color.lightness() < 128 else Qt.GlobalColor.black
+        palette.setColor(QPalette.ColorRole.HighlightedText, text_color)
+        
+        # Apply the new palette to the entire application
+        self.setPalette(palette)
+
         # This dictionary will hold the generated stylesheets
         self.header_styles = {}
 
         # Theming
         self.is_dark_mode = False
         self._setup_styles()
+        app.setStyleSheet(self.light_stylesheet) # Apply the light theme on startup
         self._generate_header_styles() # Generate styles from the new config
         self._generate_progressbar_styles()
         self._generate_employee_progressbar_styles()
@@ -1233,7 +1252,152 @@ class SchedulerApp(QMainWindow):
         self.load_master_employees(initial_employee_df)
 
     def _setup_styles(self):
-        self.light_stylesheet = "" # Default Qt style
+        # self.light_stylesheet = ""
+        self.light_stylesheet = """
+            QWidget {
+                background-color: transparent;
+                color: #000000;
+                border: none;
+            }
+            QMainWindow, QDialog {
+                background-color: #f0f0f0;
+            }
+            QFrame, QScrollArea, QListWidget {
+                background-color: #ffffff;
+            }
+            QFrame {
+                border-radius: 5px;
+            }
+            QLabel {
+                background-color: transparent;
+            }
+            QPushButton {
+                background-color: #ffffff;
+                color: #000000;
+                padding: 5px;
+                border-radius: 5px;
+                border: 1px solid #adadad;
+            }
+            QPushButton:hover {
+                background-color: #e5f1fb;
+                border-color: #0078d7;
+            }
+            QPushButton:pressed {
+                background-color: #cce4f7;
+            }
+            QLineEdit, QComboBox, QDateEdit {
+                padding: 5px;
+                border: 1px solid #abadb3;
+                border-radius: 5px;
+                background-color: #ffffff;
+            }
+            QDateEdit::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 15px;
+                border-left: 1px solid #dcdcdc;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QCheckBox::indicator {
+                width: 13px;
+                height: 13px;
+            }
+            QGroupBox {
+                border: 1px solid #d1d1d1;
+                border-radius: 5px;
+                margin-top: 15px; /* Create space for the title */
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 5px;
+                color: #000000;
+                background-color: #f0f0f0; /* Match window background */
+            }
+            QTabBar::tab {
+                background-color: #e1e1e1;
+                padding: 8px 15px;
+                border: 1px solid #d1d1d1;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+            QTabBar::tab:hover {
+                background-color: #e5f1fb;
+            }
+            QTabBar::tab:selected {
+                background-color: #ffffff;
+            }
+            QTabWidget::pane {
+                border: 1px solid #d1d1d1;
+                border-top: none;
+            }
+            QCalendarWidget QWidget {
+                alternate-background-color: #e1e1e1;
+            }
+            QCalendarWidget QAbstractItemView:enabled {
+                color: #000000;
+                selection-background-color: #0078d7;
+                selection-color: white;
+            }
+            #qt_calendar_navigationbar {
+                background-color: #e1e1e1;
+                color: black;
+            }
+            #qt_calendar_prevmonth, #qt_calendar_nextmonth {
+                color: black;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #f0f0f0;
+                width: 10px;
+                margin: 0px 0px 0px 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #c1c1c1;
+                min-height: 20px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #a8a8a8;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                border: none;
+                background: none;
+                height: 0px;
+            }
+            QScrollBar:horizontal {
+                border: none;
+                background: #f0f0f0;
+                height: 10px;
+                margin: 0px 0px 0px 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #c1c1c1;
+                min-width: 20px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #a8a8a8;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: none;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                border: none;
+                background: none;
+                height: 0px;
+            }
+            QCheckBox::indicator {
+                width: 13px;
+                height: 13px;
+            }
+        """
         self.dark_stylesheet = """
             QWidget {
                 background-color: #2b2b2b;
@@ -1245,7 +1409,7 @@ class SchedulerApp(QMainWindow):
             }
             QFrame, QScrollArea, QListWidget {
                 background-color: #3c3c3c;
-                border-radius: 5px;
+                border-radius: 3px;
             }
             QLabel {
                 background-color: transparent;
@@ -1387,6 +1551,15 @@ class SchedulerApp(QMainWindow):
             header_font.setPointSize(header_size)
             header_font.setBold(True)
 
+            # Apply header font to Top Bar buttons
+            top_bar_buttons = [
+                self.settings_button, self.manage_employees_button,
+                self.auto_schedule_button, self.week_selector_button, self.export_button,
+                self.toggle_theme_button
+            ]
+            for button in top_bar_buttons:
+                button.setFont(header_font)
+
             # Collapsible frame titles
             self.unassigned_frame.toggle_button.setFont(header_font)
             self.no_set_days_frame.toggle_button.setFont(header_font)
@@ -1402,7 +1575,22 @@ class SchedulerApp(QMainWindow):
             # --- Body Font ---
             body_font = self.font() # Get base font
             body_font.setPointSize(body_size)
-            body_font.setBold(False)
+            # Make the day headers bold but using the body font size
+            body_font_bold = self.font()
+            body_font_bold.setPointSize(body_size)
+            body_font_bold.setBold(True)
+
+            # All table-like grid headers ("Name", "Availability", etc.)
+            for widget in self.table_column_header_widgets:
+                widget.setFont(body_font_bold)
+
+            # Final schedule day name labels (e.g., "Sun", "Mon")
+            for day_widgets in self.final_schedule_day_headers.values():
+                day_widgets['label'].setFont(body_font_bold) # Changed from header_font
+
+            # Unassigned grid day name labels
+            for widget in self.day_column_header_widgets:
+                widget.setFont(body_font_bold)
 
             # Final schedule employee name labels
             for day_list in self.schedule_labels.values():
@@ -1587,7 +1775,6 @@ class SchedulerApp(QMainWindow):
         layout.addWidget(self.settings_button)
         layout.addWidget(self.manage_employees_button)
         layout.addWidget(self.auto_schedule_button)
-        layout.addWidget(QLabel("Schedule Week:"))
         layout.addWidget(self.week_selector_button)
         layout.addStretch(1)
         layout.addWidget(self.toggle_theme_button)
@@ -1636,7 +1823,9 @@ class SchedulerApp(QMainWindow):
         all_employees_frame = QFrame()
         all_employees_frame.setFrameShape(QFrame.Shape.StyledPanel)
         all_employees_layout = QVBoxLayout(all_employees_frame)
-        all_employees_layout.addWidget(QLabel("<h3>All Employees (Master List)</h3>"))
+        all_employees_title = QLabel("All Employees (Master List)")
+        self.grid_header_widgets.append(all_employees_title)
+        all_employees_layout.addWidget(all_employees_title)
         self.all_employees_scroll_area = QScrollArea()
         self.all_employees_scroll_area.setWidgetResizable(True)
         all_employees_layout.addWidget(self.all_employees_scroll_area)
@@ -1711,7 +1900,7 @@ class SchedulerApp(QMainWindow):
         for i, text in enumerate(headers_text):
             header_label = QLabel(text)
             layout.addWidget(header_label, 0, i)
-            self.grid_header_widgets.append(header_label)
+            self.table_column_header_widgets.append(header_label)
         layout.setColumnStretch(0, 2)
         layout.setColumnStretch(1, 3)
         layout.setColumnStretch(2, 2)
@@ -1747,7 +1936,7 @@ class SchedulerApp(QMainWindow):
         for c, day in enumerate(DAYS):
             header_label = QLabel(f"<b>{day}</b>")
             layout.addWidget(header_label, 0, c, alignment=Qt.AlignmentFlag.AlignCenter)
-            self.grid_header_widgets.append(header_label)
+            self.day_column_header_widgets.append(header_label)
             for r in range(MAX_ROWS_UNASSIGNED_PER_DAY_COLUMN):
                 lbl = ClickableLabel(self, "")
                 lbl.setFixedHeight(20)
@@ -1766,8 +1955,8 @@ class SchedulerApp(QMainWindow):
         header_shifts = QLabel("<b>Shifts This Week</b>")
         layout.addWidget(header_name, 0, 0)
         layout.addWidget(header_shifts, 0, 1)
-        self.grid_header_widgets.append(header_name)
-        self.grid_header_widgets.append(header_shifts)
+        self.table_column_header_widgets.append(header_name)
+        self.table_column_header_widgets.append(header_shifts)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
 
@@ -1924,9 +2113,9 @@ class SchedulerApp(QMainWindow):
 
     def get_alternating_row_style(self, index):
         if not self.is_dark_mode:
-            colors = ("transparent", "#f0f0f0")
+            colors = ("#ffffff", "#f0f0f0")
         else:
-            colors = ("transparent", "#313131")
+            colors = ("#3c3c3c", "#313131")
         return f"background-color: {colors[index % 2]};"
 
     def update_all_employees_grid(self):
@@ -2463,7 +2652,7 @@ class SchedulerApp(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyle("Breeze")
+    # app.setStyle("Breeze")
     window = SchedulerApp()
     window.show()
     sys.exit(app.exec())
