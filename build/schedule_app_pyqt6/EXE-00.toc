@@ -73,7 +73,7 @@
  [],
  False,
  False,
- 1753937590,
+ 1754010380,
  [('runw.exe',
    'C:\\Users\\bjtur\\Documents\\repositories\\ScheduleApp-PyQt6\\.venv\\Lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\runw.exe',
    'EXECUTABLE')],
