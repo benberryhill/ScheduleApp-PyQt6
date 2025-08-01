@@ -2,11 +2,12 @@ import sys
 import os
 import pandas as pd
 import re
+import json
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox, QScrollArea, QFrame,
     QMessageBox, QSizePolicy, QMenu, QDialog, QColorDialog, QTabWidget, QGroupBox,
-    QDialogButtonBox, QProgressBar, QListWidget, QDateEdit, QCalendarWidget
+    QDialogButtonBox, QProgressBar, QListWidget, QDateEdit, QCalendarWidget, QSlider
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QEvent, QSize, QDate
 from PyQt6.QtGui import QPalette, QColor, QIcon
@@ -25,6 +26,7 @@ EXCEL_FOLDER_NAME = "excel_files"
 EXCEL_FOLDER = resource_path(EXCEL_FOLDER_NAME)
 RECENTLY_DELETED_FILE = "recently_deleted.xlsx" # For undo functionality
 EMPLOYEE_FILE = "Employees_Full_List.xlsx" # Master list
+SETTINGS_FILE = "app_settings.json"
 DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 MAX_DISPLAY_ROWS_SCHEDULE = 60 # Max rows per day in Final Schedule
 MAX_ROWS_UNASSIGNED_PER_DAY_COLUMN = 60 # Max rows per day in the Unassigned Employees grid
@@ -216,18 +218,52 @@ class SettingsWindow(QDialog):
 
         layout.addWidget(targets_group)
 
-        # --- Highlight Color Settings ---
-        highlight_group = QGroupBox("Selection Highlight Color")
-        highlight_layout = QHBoxLayout(highlight_group)
-        highlight_layout.addWidget(QLabel("Highlight Color:"))
+        # --- Font Size Settings (with Sliders) ---
+        font_group = QGroupBox("Font Sizes")
+        font_layout = QGridLayout(font_group)
 
-        self.highlight_color_button = self._create_color_picker_button(
-            self.temp_theme_config['highlight_bg'],
-            lambda color: self.temp_theme_config.update({'highlight_bg': color.name()})
+        # --- Header Font Slider ---
+        font_layout.addWidget(QLabel("Headers:"), 0, 0)
+
+        self.header_font_slider = QSlider(Qt.Orientation.Horizontal)
+        self.header_font_slider.setRange(8, 14)
+        initial_header_size = self.temp_theme_config.get('header_font_size', 10)
+        self.header_font_slider.setValue(initial_header_size)
+
+        # Label to show the slider's current value
+        self.header_font_value_label = QLabel(f"{initial_header_size} pt")
+        self.header_font_value_label.setFixedWidth(40) # Ensures layout stability
+
+        # Connect slider movement to update the value label
+        self.header_font_slider.valueChanged.connect(
+            lambda value: self.header_font_value_label.setText(f"{value} pt")
         )
-        highlight_layout.addWidget(self.highlight_color_button)
-        highlight_layout.addStretch()
-        layout.addWidget(highlight_group)
+
+        font_layout.addWidget(self.header_font_slider, 0, 1)
+        font_layout.addWidget(self.header_font_value_label, 0, 2)
+
+        # --- Body Font Slider ---
+        font_layout.addWidget(QLabel("Body Text:"), 1, 0)
+
+        self.body_font_slider = QSlider(Qt.Orientation.Horizontal)
+        self.body_font_slider.setRange(8, 14)
+        initial_body_size = self.temp_theme_config.get('body_font_size', 9)
+        self.body_font_slider.setValue(initial_body_size)
+
+        # Label to show the slider's current value
+        self.body_font_value_label = QLabel(f"{initial_body_size} pt")
+        self.body_font_value_label.setFixedWidth(40)
+
+        # Connect slider movement to update the value label
+        self.body_font_slider.valueChanged.connect(
+            lambda value: self.body_font_value_label.setText(f"{value} pt")
+        )
+
+        font_layout.addWidget(self.body_font_slider, 1, 1)
+        font_layout.addWidget(self.body_font_value_label, 1, 2)
+
+        font_layout.setColumnStretch(1, 1) # Make the slider column stretch
+        layout.addWidget(font_group)
 
         layout.addStretch()
         return widget
@@ -262,7 +298,23 @@ class SettingsWindow(QDialog):
             grid_layout.addWidget(label, i, 0)
             grid_layout.addWidget(color_button, i, 1)
 
+        # --- Highlight Color Group ---
+        highlight_group = QGroupBox("Selection Highlight Color")
+        highlight_layout = QHBoxLayout(highlight_group)
+        highlight_layout.addWidget(QLabel("Highlight Color:"))
+
+        # The callback now updates the nested dictionary for the specific theme
+        callback = lambda color, mode=theme_mode: self.temp_theme_config['highlight_colors'].update({mode: color.name()})
+
+        # Get the initial color from the correct theme
+        initial_color = self.temp_theme_config['highlight_colors'][theme_mode]
+
+        color_button = self._create_color_picker_button(initial_color, callback)
+        highlight_layout.addWidget(color_button)
+        highlight_layout.addStretch()
+
         layout.addWidget(group)
+        layout.addWidget(highlight_group)
         layout.addStretch()
         return widget
 
@@ -297,11 +349,18 @@ class SettingsWindow(QDialog):
             if entry.text().isdigit():
                 self.main_window.max_per_day[day] = int(entry.text())
 
+        # Update temp_theme_config from all UI controls before applying
+        self.temp_theme_config['header_font_size'] = self.header_font_slider.value()
+        self.temp_theme_config['body_font_size'] = self.body_font_slider.value()
+
         # Apply theme config
         self.main_window.theme_config = self.temp_theme_config.copy()
 
         # Tell the main window to refresh its styles and UI
         self.main_window.apply_settings_and_refresh()
+
+        # Save the new settings to the file
+        self.main_window.save_settings()
 
     def accept(self):
         """Applies changes and closes the dialog (OK button)."""
@@ -502,8 +561,8 @@ class EmployeeEditorWindow(QDialog):
             QMessageBox.critical(self, "Error", f"Could not find or load data for '{selected_name}'.\nError: {e}")
             self.clear_fields()
 
-    def save_changes(self): # Renamed from save_and_close
-        """Validates input and saves changes (add or update) to the master Excel file."""
+    def save_changes(self):
+        """Validates input, saves to Excel, and performs a non-destructive UI update."""
         name = self.edit_name.text().strip()
         if not name:
             QMessageBox.warning(self, "Input Error", "Employee name cannot be empty.")
@@ -511,80 +570,106 @@ class EmployeeEditorWindow(QDialog):
 
         try:
             max_days = int(self.max_days_edit.text())
-            if not (1 <= max_days <= 7): raise ValueError
         except (ValueError, TypeError):
             QMessageBox.warning(self, "Input Error", "Max Days/Week must be a number between 1 and 7.")
             return
 
-        # Define all columns the app manages and set their expected type to string
-        all_managed_cols = ['Name', 'Notes', 'Set Schedule', 'Max Per Week', 'Time Off Dates'] + DAYS
-        dtype_map = {col: str for col in all_managed_cols}
-
         try:
-            # Read the Excel file, forcing all our columns to be treated as strings
-            df = pd.read_excel(master_employee_file_path, dtype=dtype_map)
-        except (FileNotFoundError, ValueError):
-            # If a file doesn't exist or a column is missing, create a new blank DataFrame
-            df = pd.DataFrame(columns=all_managed_cols)
-            # Ensure the new blank DataFrame also has the correct types
-            df = df.astype(dtype_map)
-
-        # As a safeguard, ensure all managed columns actually exist in the DataFrame
-        for col in all_managed_cols:
-            if col not in df.columns:
-                df[col] = ''
-
-        # Final cast to ensure any newly added columns have the correct string type
-        df = df.astype(dtype_map)
-
-        if 'Time Off Dates' not in df.columns:
-            df['Time Off Dates'] = ''
-        # Explicitly cast the column to 'object' to prevent dtype warnings.
-        # .astype(str) would work but 'object' is more idiomatic for mixed/string data.
-        df['Time Off Dates'] = df['Time Off Dates'].astype('object')
+            df = pd.read_excel(master_employee_file_path)
+        except FileNotFoundError:
+            df = pd.DataFrame(columns=['Name'] + DAYS + ['Notes', 'Set Schedule', 'Max Per Week', 'Time Off Dates'])
 
         original_name = self.employee_selector_combo.currentText()
         is_add_mode = self.add_new_mode_check.isChecked()
 
-        # Check for name collision on add OR rename
         if (is_add_mode or (not is_add_mode and name != original_name)) and name in df['Name'].values:
             QMessageBox.warning(self, "Input Error", f"An employee named '{name}' already exists.")
             return
 
-        # Get time off data from the list widget
-        time_off_items = [self.time_off_list.item(i).text() for i in range(self.time_off_list.count())]
-        time_off_string = "; ".join(time_off_items)
+        # --- START OF CHANGE ---
+        # Get the state of time-off BEFORE changes are saved
+        old_time_off_string = ""
+        if not is_add_mode:
+            emp_data_row = df[df['Name'] == original_name]
+            if not emp_data_row.empty:
+                # Ensure we handle potential missing column or NaN values gracefully
+                old_time_off_val = emp_data_row.iloc[0].get('Time Off Dates')
+                if pd.notna(old_time_off_val):
+                    old_time_off_string = str(old_time_off_val)
 
-        # Prepare data row
+        # Get the new time-off state from the UI
+        new_time_off_items = [self.time_off_list.item(i).text() for i in range(self.time_off_list.count())]
+        new_time_off_string = "; ".join(new_time_off_items)
+
+        # Parse both old and new dates to find what was added and removed
+        old_dates = self._parse_time_off_entries_to_dates(old_time_off_string.split(';'))
+        new_dates = self._parse_time_off_entries_to_dates(new_time_off_items)
+
+        added_dates = new_dates - old_dates
+        removed_dates = old_dates - new_dates
+        # --- END OF CHANGE ---
+
         row_data = {
             'Name': name,
             'Notes': self.edit_notes.text().strip(),
             'Set Schedule': 'Yes' if self.set_schedule_check.isChecked() else 'No',
             'Max Per Week': max_days,
-            'Time Off Dates': time_off_string,
+            'Time Off Dates': new_time_off_string,
             **{day: ('Yes' if chk.isChecked() else 'No') for day, chk in self.availability_boxes.items()}
         }
 
         if is_add_mode:
-            new_row_df = pd.DataFrame([row_data])
-            df = pd.concat([df, new_row_df], ignore_index=True)
+            df = pd.concat([df, pd.DataFrame([row_data])], ignore_index=True)
         else:
-            idx = df.index[df['Name'] == original_name].tolist()
-            if not idx:
-                QMessageBox.critical(self, "Save Error", f"Could not find '{original_name}' to update.")
-                return
-
-            # Use .loc to update all columns from the dictionary
+            idx = df.index[df['Name'] == original_name].tolist()[0]
             for col, value in row_data.items():
-                df.loc[idx[0], col] = value
+                df.loc[idx, col] = value
 
         df.to_excel(master_employee_file_path, index=False)
         QMessageBox.information(self, "Success", f"Changes for '{name}' have been saved.")
 
-        # --- Refresh everything but keep window open ---
-        self.main_window.reload_from_master_file()
+        # Perform a non-destructive update
+        main_app = self.main_window
+        main_app.time_off_manager.load_time_off_data(master_employee_file_path)
+
+        emp_obj = None
+        if is_add_mode:
+            emp_obj = Employee(name, {d: row_data[d] == 'Yes' for d in DAYS}, row_data['Notes'])
+            main_app.employees.append(emp_obj)
+            main_app.employees.sort(key=lambda e: e.name)
+        else:
+            emp_obj = next((e for e in main_app.employees if e.name == original_name), None)
+
+        if emp_obj:
+            emp_obj.name = name
+            emp_obj.notes = row_data['Notes']
+            emp_obj.availability = {day: row_data[day] == 'Yes' for day in DAYS}
+
+            # --- START OF CHANGE ---
+            # Now, update the live schedule based on added/removed dates
+            start_of_week = main_app.current_week_start_date
+            end_of_week = start_of_week.addDays(6)
+
+            # 1. Handle newly ADDED time-off (remove from schedule)
+            for date in added_dates:
+                if start_of_week <= date <= end_of_week:
+                    day_index = start_of_week.daysTo(date)
+                    day_key = DAYS[day_index]
+                    main_app.schedule.remove_employee(emp_obj, day_key)
+
+            # 2. Handle REMOVED time-off (add back to schedule if "Set Schedule")
+            if self.set_schedule_check.isChecked():
+                for date in removed_dates:
+                    if start_of_week <= date <= end_of_week:
+                        day_index = start_of_week.daysTo(date)
+                        day_key = DAYS[day_index]
+                        # Add back if they are available and not already there
+                        if emp_obj.availability.get(day_key, False):
+                            main_app.schedule.assign_employee(emp_obj, day_key)
+            # --- END OF CHANGE ---
+
+        main_app.update_all_views()
         self._refresh_employee_list(select_name=name)
-        # Note: self.accept() is REMOVED
 
     def delete_employee(self):
         """Moves the selected employee to the recently_deleted file."""
@@ -686,6 +771,31 @@ class EmployeeEditorWindow(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Restore Error", f"Failed to restore employee:\n{e}")
 
+    def _parse_time_off_entries_to_dates(self, entries):
+        """Parses a list of string entries into a set of unique QDate objects."""
+        all_dates = set()
+        for entry in entries:
+            entry = entry.strip()
+            if not entry:
+                continue
+            try:
+                if '-' in entry:
+                    start_str, end_str = entry.split('-')
+                    start_date = QDate.fromString(start_str.strip(), "MM/dd/yyyy")
+                    end_date = QDate.fromString(end_str.strip(), "MM/dd/yyyy")
+                    if start_date.isValid() and end_date.isValid():
+                        current_date = start_date
+                        while current_date <= end_date:
+                            all_dates.add(current_date)
+                            current_date = current_date.addDays(1)
+                else:
+                    single_date = QDate.fromString(entry.strip(), "MM/dd/yyyy")
+                    if single_date.isValid():
+                        all_dates.add(single_date)
+            except Exception as e:
+                print(f"Could not parse date entry '{entry}' for comparison: {e}")
+        return all_dates
+
     def _add_time_off(self):
         """Opens a dialog to add a new time off entry."""
         dialog = TimeOffDialog(self)
@@ -719,6 +829,64 @@ class EmployeeEditorWindow(QDialog):
                                      QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             self.time_off_list.takeItem(self.time_off_list.row(selected_item))
+
+# --- Collapsible Frame Widget ---
+class CollapsibleFrame(QFrame):
+    """A custom frame that can be collapsed or expanded, correctly resizing within a layout."""
+    def __init__(self, title="", parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(5, 5, 5, 5)
+        main_layout.setSpacing(0)
+        main_layout.setAlignment(Qt.AlignmentFlag.AlignTop) # Important for collapsing
+
+        self.toggle_button = QPushButton(f"▶ {title}")
+        self.toggle_button.setStyleSheet("text-align: left; font-weight: bold; border: none; padding: 5px;")
+        self.toggle_button.setCheckable(True)
+        self.toggle_button.setChecked(False) # Start collapsed
+
+        self.content_frame = QFrame()
+        self.content_frame.setFrameShape(QFrame.Shape.NoFrame)
+        self.content_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.content_frame.setVisible(False)
+
+        self.toggle_button.toggled.connect(self._on_toggle)
+
+        main_layout.addWidget(self.toggle_button)
+        main_layout.addWidget(self.content_frame)
+
+        # --- KEY CHANGE 1: Set the initial size policy for the collapsed state ---
+        # This tells the layout that this widget's preferred vertical size is based
+        # on its contents, and it should not be stretched vertically.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
+    def _on_toggle(self, checked):
+        """Handles the show/hide logic and dynamically changes the widget's size policy."""
+        if checked:
+            self.content_frame.setVisible(True)
+            self.toggle_button.setText(f"▼ {self.toggle_button.text()[2:]}")
+            # --- KEY CHANGE 2: When EXPANDED, tell the layout it can grow vertically.
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        else:
+            self.content_frame.setVisible(False)
+            self.toggle_button.setText(f"▶ {self.toggle_button.text()[2:]}")
+            # --- KEY CHANGE 3: When COLLAPSED, tell the layout it should be its minimum possible size.
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
+        # --- KEY CHANGE 4: Tell the parent widget's layout to reactivate and recalculate. ---
+        # This is more forceful and reliable than updateGeometry() for this specific case.
+        if self.parentWidget() and self.parentWidget().layout():
+            self.parentWidget().layout().activate()
+
+    def setContentLayout(self, layout):
+        """Sets the layout for the collapsible content area."""
+        old_layout = self.content_frame.layout()
+        if old_layout is not None:
+            # Properly dispose of the old layout
+            QWidget().setLayout(old_layout)
+        self.content_frame.setLayout(layout)
 
 # --- Custom Qt Widget for Click/Drag Events ---
 class ClickableLabel(QLabel):
@@ -986,21 +1154,25 @@ class SchedulerApp(QMainWindow):
         self.current_week_start_date = QDate()
         self.max_per_day = {day: 35 for day in DAYS}
 
-        # self.max_entries = {}
-        # for i, day in enumerate(DAYS):
-        #     entry = QLineEdit(str(self.max_per_day[day]))
-        #     self.max_entries[day] = entry
-
         self.selected_employee_obj = None
         self.selected_row_widgets = None
         self.drag_data = {'label_widget': None, 'employee': None}
         self.highlighted_employee_obj = None # To track the employee for grid highlighting
 
+        self.grid_header_widgets = []
+        self.employee_progress_styles = {}
+        self.no_set_days_rows = []
+
         # For mapping widgets to employee objects, similar to the original's approach
         self.widget_to_employee = {}
 
         self.theme_config = {
-            'highlight_bg': QColor(0, 120, 215).name(), # Default system blue
+            'highlight_colors': {
+                'light': QColor(0, 120, 215).name(),  # Default system blue for light mode
+                'dark': QColor(0, 90, 158).name()     # A darker blue for dark mode
+            },
+            'header_font_size': 10,
+            'body_font_size': 9,
             'light_header_colors': {
                 "empty": "#f0f0f0",
                 "warning": "indianred",
@@ -1014,6 +1186,9 @@ class SchedulerApp(QMainWindow):
                 "full": "teal",
             }
         }
+        # Now, load settings from file, which will overwrite the defaults
+        self.load_settings()
+
         # This dictionary will hold the generated stylesheets
         self.header_styles = {}
 
@@ -1022,6 +1197,7 @@ class SchedulerApp(QMainWindow):
         self._setup_styles()
         self._generate_header_styles() # Generate styles from the new config
         self._generate_progressbar_styles()
+        self._generate_employee_progressbar_styles()
         self._update_highlight_style() # Initialize the highlight style based on the current palette
         # Define styles for the schedule day headers
         self.header_base_style_template = "QLabel {{ font-weight: bold; padding: 4px; border-radius: 4px; color: {text_color}; background-color: {bg_color}; }}"
@@ -1049,6 +1225,9 @@ class SchedulerApp(QMainWindow):
 
         # Initialize the week selector
         self._on_week_changed(QDate.currentDate())
+
+        # Apply initial font styles after UI is built
+        self._apply_font_styles()
 
         # Load data into UI
         self.load_master_employees(initial_employee_df)
@@ -1197,6 +1376,56 @@ class SchedulerApp(QMainWindow):
             }
         """
 
+    def _apply_font_styles(self):
+        """Applies font sizes from theme_config to relevant widgets."""
+        try:
+            header_size = self.theme_config.get('header_font_size', 10)
+            body_size = self.theme_config.get('body_font_size', 9)
+
+            # --- Header Font ---
+            header_font = self.font() # Get base font
+            header_font.setPointSize(header_size)
+            header_font.setBold(True)
+
+            # Collapsible frame titles
+            self.unassigned_frame.toggle_button.setFont(header_font)
+            self.no_set_days_frame.toggle_button.setFont(header_font)
+
+            # Final schedule day name labels (e.g., "Sun", "Mon")
+            for day_widgets in self.final_schedule_day_headers.values():
+                day_widgets['label'].setFont(header_font)
+
+            # All other grid headers ("Name", "Availability", etc.)
+            for widget in self.grid_header_widgets:
+                widget.setFont(header_font)
+
+            # --- Body Font ---
+            body_font = self.font() # Get base font
+            body_font.setPointSize(body_size)
+            body_font.setBold(False)
+
+            # Final schedule employee name labels
+            for day_list in self.schedule_labels.values():
+                for label in day_list:
+                    label.setFont(body_font)
+
+            # All Employees grid body labels
+            for row_data in self.all_employees_rows:
+                for widget in row_data['conceptual_row_widgets']:
+                    widget.setFont(body_font)
+
+            # Unassigned Employees grid body labels
+            for day_list in self.unassigned_labels.values():
+                for label in day_list:
+                    label.setFont(body_font)
+
+            # "No Set Days" grid body labels
+            for row_data in self.no_set_days_rows:
+                row_data['name_lbl'].setFont(body_font)
+
+        except Exception as e:
+            print(f"Error applying font styles: {e}")
+
     def _generate_header_styles(self):
         """
         Generates header stylesheets from the theme_config dictionary.
@@ -1275,7 +1504,9 @@ class SchedulerApp(QMainWindow):
 
         # 2. Apply palette for highlight color
         palette = self.palette()
-        highlight_color = QColor(self.theme_config['highlight_bg'])
+        theme_mode = 'dark' if self.is_dark_mode else 'light'
+        highlight_color_hex = self.theme_config['highlight_colors'][theme_mode]
+        highlight_color = QColor(highlight_color_hex)
         palette.setColor(QPalette.ColorRole.Highlight, highlight_color)
         text_color = Qt.GlobalColor.white if highlight_color.lightness() < 128 else Qt.GlobalColor.black
         palette.setColor(QPalette.ColorRole.HighlightedText, text_color)
@@ -1288,6 +1519,9 @@ class SchedulerApp(QMainWindow):
 
         # 4. Refresh all views to show changes
         self.update_all_views()
+
+        # 5. Apply the new font styles
+        self._apply_font_styles()
 
     def _open_settings_window(self):
         """Opens the main settings dialog."""
@@ -1380,17 +1614,25 @@ class SchedulerApp(QMainWindow):
     def _create_right_column(self):
         layout = QVBoxLayout()
 
-        # Unassigned Employees
-        unassigned_frame = QFrame()
-        unassigned_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        unassigned_layout = QVBoxLayout(unassigned_frame)
-        unassigned_layout.addWidget(QLabel("<h3>Unassigned Employees (Available Days)</h3>"))
+        # Unassigned Employees (Now a CollapsibleFrame)
+        self.unassigned_frame = CollapsibleFrame("Unassigned Employees (Available Days)")
+        unassigned_content_layout = QVBoxLayout()
         self.unassigned_scroll_area = QScrollArea()
         self.unassigned_scroll_area.setWidgetResizable(True)
-        unassigned_layout.addWidget(self.unassigned_scroll_area)
+        unassigned_content_layout.addWidget(self.unassigned_scroll_area)
+        self.unassigned_frame.setContentLayout(unassigned_content_layout)
         self._build_unassigned_grid()
-        
-        # All Employees
+
+        # No Set Days (The new CollapsibleFrame)
+        self.no_set_days_frame = CollapsibleFrame("Employees With No Set Days")
+        no_set_days_content_layout = QVBoxLayout()
+        self.no_set_days_scroll_area = QScrollArea()
+        self.no_set_days_scroll_area.setWidgetResizable(True)
+        no_set_days_content_layout.addWidget(self.no_set_days_scroll_area)
+        self.no_set_days_frame.setContentLayout(no_set_days_content_layout)
+        self._build_no_set_days_grid()
+
+        # All Employees (Unchanged)
         all_employees_frame = QFrame()
         all_employees_frame.setFrameShape(QFrame.Shape.StyledPanel)
         all_employees_layout = QVBoxLayout(all_employees_frame)
@@ -1400,8 +1642,11 @@ class SchedulerApp(QMainWindow):
         all_employees_layout.addWidget(self.all_employees_scroll_area)
         self._build_all_employees_grid()
 
-        layout.addWidget(unassigned_frame, 1) # Stretch
-        layout.addWidget(all_employees_frame, 1) # Stretch
+        # Add frames to the layout with stretch factors to share space
+        layout.addWidget(self.unassigned_frame, 1)
+        layout.addWidget(self.no_set_days_frame, 1)
+        layout.addWidget(all_employees_frame, 1)
+
         return layout
 
     def _build_schedule_preview(self, parent_container):
@@ -1462,10 +1707,11 @@ class SchedulerApp(QMainWindow):
         layout = QGridLayout(container)
         
         # Headers
-        layout.addWidget(QLabel("<b>Name</b>"), 0, 0)
-        layout.addWidget(QLabel("<b>Availability</b>"), 0, 1)
-        layout.addWidget(QLabel("<b>Notes</b>"), 0, 2)
-        layout.addWidget(QLabel("<b>Time Off Dates</b>"), 0, 3)
+        headers_text = ["<b>Name</b>", "<b>Availability</b>", "<b>Notes</b>", "<b>Time Off Dates</b>"]
+        for i, text in enumerate(headers_text):
+            header_label = QLabel(text)
+            layout.addWidget(header_label, 0, i)
+            self.grid_header_widgets.append(header_label)
         layout.setColumnStretch(0, 2)
         layout.setColumnStretch(1, 3)
         layout.setColumnStretch(2, 2)
@@ -1499,7 +1745,9 @@ class SchedulerApp(QMainWindow):
 
         self.unassigned_labels = {day: [] for day in DAYS}
         for c, day in enumerate(DAYS):
-            layout.addWidget(QLabel(f"<b>{day}</b>"), 0, c, alignment=Qt.AlignmentFlag.AlignCenter)
+            header_label = QLabel(f"<b>{day}</b>")
+            layout.addWidget(header_label, 0, c, alignment=Qt.AlignmentFlag.AlignCenter)
+            self.grid_header_widgets.append(header_label)
             for r in range(MAX_ROWS_UNASSIGNED_PER_DAY_COLUMN):
                 lbl = ClickableLabel(self, "")
                 lbl.setFixedHeight(20)
@@ -1508,6 +1756,39 @@ class SchedulerApp(QMainWindow):
                 self.unassigned_labels[day].append(lbl)
             layout.setColumnStretch(c, 1)
         layout.setRowStretch(MAX_ROWS_UNASSIGNED_PER_DAY_COLUMN + 1, 1)
+
+    def _build_no_set_days_grid(self):
+        container = QWidget()
+        self.no_set_days_scroll_area.setWidget(container)
+        layout = QGridLayout(container)
+
+        header_name = QLabel("<b>Name</b>")
+        header_shifts = QLabel("<b>Shifts This Week</b>")
+        layout.addWidget(header_name, 0, 0)
+        layout.addWidget(header_shifts, 0, 1)
+        self.grid_header_widgets.append(header_name)
+        self.grid_header_widgets.append(header_shifts)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+
+        self.no_set_days_rows = []
+        # Use a smaller number of pre-built rows as this list is usually shorter
+        for r in range(self.max_display_rows_per_list):
+            name_lbl = ClickableLabel(self, "")
+            name_lbl.is_draggable = True
+
+            progress_bar = QProgressBar()
+            progress_bar.setFixedHeight(20)
+
+            layout.addWidget(name_lbl, r + 1, 0)
+            layout.addWidget(progress_bar, r + 1, 1)
+
+            self.no_set_days_rows.append({
+                'name_lbl': name_lbl,
+                'progress_bar': progress_bar,
+                'employee': None
+            })
+        layout.setRowStretch(self.max_display_rows_per_list + 1, 1)
 
     def _open_employee_editor(self):
         """Opens the employee editor dialog."""
@@ -1527,6 +1808,41 @@ class SchedulerApp(QMainWindow):
         if dialog.exec():
             if dialog.selected_date:
                 self._on_week_changed(dialog.selected_date)
+
+    def _generate_employee_progressbar_styles(self):
+        """Generates QProgressBar styles for employee weekly shift counts."""
+        self.employee_progress_styles = {'light': {}, 'dark': {}}
+
+        # We'll map our new statuses to the existing theme colors for consistency
+        status_color_map = {
+            "empty": "empty",          # 0 shifts
+            "low": "warning",          # 1-2 shifts
+            "approaching_max": "semi_full", # max - 1 shifts
+            "at_max": "full"           # max shifts
+        }
+
+        for theme in ['light', 'dark']:
+            for status, color_key in status_color_map.items():
+                bg_hex = self.theme_config[f'{theme}_header_colors'][color_key]
+                chunk_color = QColor(bg_hex)
+                text_color = "white" if chunk_color.lightness() < 128 else "black"
+
+                # Use a simplified template since we don't need a background bar
+                style = f"""
+                    QProgressBar {{
+                        border: 1px solid grey;
+                        border-radius: 5px;
+                        text-align: center;
+                        background-color: transparent;
+                        color: {"white" if theme == 'dark' else "black"};
+                    }}
+                    QProgressBar::chunk {{
+                        background-color: {bg_hex};
+                        border-radius: 4px;
+                        margin: 1px;
+                    }}
+                """
+                self.employee_progress_styles[theme][status] = style
 
     def reload_from_master_file(self):
         """Reloads all employee data and time off data, then refreshes the entire UI."""
@@ -1603,6 +1919,7 @@ class SchedulerApp(QMainWindow):
     def update_all_views(self):
         self.update_all_employees_grid()
         self.update_unassigned_grid()
+        self.update_no_set_days_grid()
         self.update_final_schedule_display()
 
     def get_alternating_row_style(self, index):
@@ -1702,6 +2019,67 @@ class SchedulerApp(QMainWindow):
                         lbl.setStyleSheet(self.get_alternating_row_style(r_idx))
                     lbl.show()
 
+    def update_no_set_days_grid(self):
+        """Populates the grid of employees who have no set available days."""
+        try:
+            df = pd.read_excel(master_employee_file_path)
+            max_per_week_map = dict(zip(df['Name'], df.get('Max Per Week', [7]*len(df))))
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not read master employee file:\n{e}")
+            return
+
+        current_schedule_count = {emp.name: 0 for emp in self.employees}
+        for day in DAYS:
+            for emp in self.schedule.scheduled.get(day, []):
+                current_schedule_count[emp.name] += 1
+
+        no_set_days_employees = []
+        for emp in self.employees:
+            if not any(emp.availability.values()):
+                if current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7):
+                    no_set_days_employees.append(emp)
+
+        no_set_days_employees.sort(key=lambda e: e.name)
+
+        theme_mode = 'dark' if self.is_dark_mode else 'light'
+        style_map = self.employee_progress_styles[theme_mode]
+
+        for i, row_data in enumerate(self.no_set_days_rows):
+            if i < len(no_set_days_employees):
+                emp = no_set_days_employees[i]
+                current_count = current_schedule_count.get(emp.name, 0)
+                max_val = int(max_per_week_map.get(emp.name, 7))
+
+                row_data['employee'] = emp
+                row_data['name_lbl'].setText(emp.name)
+                row_data['name_lbl'].employee_obj = emp
+                row_data['name_lbl'].show()
+
+                pb = row_data['progress_bar']
+                pb.setRange(0, max_val)
+                pb.setValue(current_count)
+                pb.setFormat(f"{current_count} / {max_val}")
+
+                status = "empty"
+                if current_count >= max_val: status = "at_max"
+                elif current_count == max_val - 1: status = "approaching_max"
+                elif 0 < current_count: status = "low"
+
+                pb.setStyleSheet(style_map.get(status, ""))
+                pb.show()
+
+                # --- THIS IS THE FIX ---
+                # Add styling for the name label to handle both the global highlight
+                # and to reset the style after a drag operation.
+
+                row_data['name_lbl'].setStyleSheet(self.get_alternating_row_style(i))
+                # --- END OF FIX ---
+
+            else:
+                row_data['employee'] = None
+                row_data['name_lbl'].hide()
+                row_data['progress_bar'].hide()
+
     def update_final_schedule_display(self):
         current_max = self.max_per_day
 
@@ -1718,6 +2096,13 @@ class SchedulerApp(QMainWindow):
             progress_bar.setRange(0, max_val)
             progress_bar.setValue(count)
             progress_bar.setFormat(f"{count} / {max_val}") # Custom text format
+            if count > max_val:
+                progress_bar.setRange(0, count)
+                progress_bar.setValue(count)
+            else:
+                # Otherwise, use the standard range and value.
+                progress_bar.setRange(0, max_val)
+                progress_bar.setValue(count)
 
             # Determine the visual status
             theme_mode = 'dark' if self.is_dark_mode else 'light'
@@ -1927,6 +2312,58 @@ class SchedulerApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export schedule:\n{e}")
 
+    def load_settings(self):
+        """Loads settings from the JSON file on startup."""
+        settings_path = os.path.join(EXCEL_FOLDER, SETTINGS_FILE)
+        try:
+            if os.path.exists(settings_path):
+                with open(settings_path, 'r') as f:
+                    loaded_settings = json.load(f)
+
+                # Get the theme config part of the loaded settings
+            if 'theme_config' in loaded_settings:
+                loaded_theme_conf = loaded_settings['theme_config']
+
+                # Check for the old 'highlight_bg' key and migrate it
+                if 'highlight_bg' in loaded_theme_conf and 'highlight_colors' not in loaded_theme_conf:
+                    print("Migrating old 'highlight_bg' setting to new format.")
+                    old_color = loaded_theme_conf.pop('highlight_bg')
+                    loaded_theme_conf['highlight_colors'] = {
+                        'light': old_color,
+                        'dark': self.theme_config['highlight_colors']['dark'] # Use default for dark
+                    }
+
+                # Update the application's config with the loaded one.
+                # This is a simple "deep update" for one level of nesting.
+                for key, value in loaded_theme_conf.items():
+                    if isinstance(value, dict) and key in self.theme_config:
+                        self.theme_config[key].update(value)
+                    else:
+                        self.theme_config[key] = value
+
+            if 'max_per_day' in loaded_settings:
+                self.max_per_day.update(loaded_settings.get('max_per_day', {}))
+
+            print("Settings loaded successfully.")
+        except (json.JSONDecodeError, TypeError) as e:
+            print(f"Error loading settings file, using defaults. Error: {e}")
+        except Exception as e:
+            print(f"An unexpected error occurred while loading settings: {e}")
+
+    def save_settings(self):
+        """Saves current settings to the JSON file."""
+        settings_path = os.path.join(EXCEL_FOLDER, SETTINGS_FILE)
+        try:
+            settings_to_save = {
+                'theme_config': self.theme_config,
+                'max_per_day': self.max_per_day
+            }
+            with open(settings_path, 'w') as f:
+                json.dump(settings_to_save, f, indent=4)
+            print("Settings saved successfully.")
+        except Exception as e:
+            print(f"Error saving settings: {e}")
+
 # --- Drag/Drop and Click Handling ---
     def on_drag_start(self, label_widget):
         if label_widget and label_widget.employee_obj:
@@ -1935,6 +2372,14 @@ class SchedulerApp(QMainWindow):
             label_widget.setStyleSheet(f"background-color: {self.palette().color(QPalette.ColorRole.Highlight).name()};")
 
     def mouseReleaseEvent(self, event):
+        # Immediately restore the original label's style if a drag was in progress.
+        # This removes the highlight instantly, before any other logic runs.
+        if self.drag_data.get('label_widget'):
+            original_widget = self.drag_data['label_widget']
+            original_style = self.drag_data.get('original_style', '')
+            if original_widget:
+                original_widget.setStyleSheet(original_style)
+
         if not self.drag_data.get('employee'):
             return
 
@@ -1997,8 +2442,24 @@ class SchedulerApp(QMainWindow):
             app.setStyleSheet(self.dark_stylesheet)
         else:
             app.setStyleSheet(self.light_stylesheet)
+
+        # Re-apply the palette to get the correct highlight color for the new theme
+        palette = self.palette()
+        theme_mode = 'dark' if self.is_dark_mode else 'light'
+        highlight_color_hex = self.theme_config['highlight_colors'][theme_mode]
+        highlight_color = QColor(highlight_color_hex)
+        palette.setColor(QPalette.ColorRole.Highlight, highlight_color)
+        text_color = Qt.GlobalColor.white if highlight_color.lightness() < 128 else Qt.GlobalColor.black
+        palette.setColor(QPalette.ColorRole.HighlightedText, text_color)
+        self.setPalette(palette)
+
         self._update_highlight_style()
         self.update_all_views()
+
+    def closeEvent(self, event):
+        """Called automatically when the main window is closed."""
+        self.save_settings()
+        super().closeEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

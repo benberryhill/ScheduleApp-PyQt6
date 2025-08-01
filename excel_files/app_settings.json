@@ -1,0 +1,35 @@
+{
+    "theme_config": {
+        "highlight_colors": {
+            "light": "#b7e3ff",
+            "dark": "#008df1"
+        },
+        "header_font_size": 11,
+        "body_font_size": 10,
+        "light_header_colors": {
+            "empty": "#f0f0f0",
+            "warning": "indianred",
+            "semi_full": "royalblue",
+            "full": "lightseagreen"
+        },
+        "dark_header_colors": {
+            "empty": "#3c3c3c",
+            "warning": "darkred",
+            "semi_full": "darkblue",
+            "full": "teal"
+        },
+        "light_highlight_bg": "#e6f5ff",
+        "dark_highlight_bg": "#94b4f8",
+        "font_size_header": 11,
+        "font_size_content": 10
+    },
+    "max_per_day": {
+        "Sun": 35,
+        "Mon": 35,
+        "Tue": 35,
+        "Wed": 35,
+        "Thu": 35,
+        "Fri": 35,
+        "Sat": 35
+    }
+}
