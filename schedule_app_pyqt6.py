@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import re
 import json
+import urllib.request
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox, QScrollArea, QFrame,
@@ -265,6 +266,27 @@ class SettingsWindow(QDialog):
         font_layout.setColumnStretch(1, 1) # Make the slider column stretch
         layout.addWidget(font_group)
 
+        # --- Application Update Settings ---
+        update_group = QGroupBox("Application Update")
+        update_layout = QVBoxLayout(update_group)
+
+        # URL Input
+        url_layout = QHBoxLayout()
+        self.update_url_edit = QLineEdit()
+        # IMPORTANT: Replace this URL with the raw URL of your Python file on GitHub
+        self.update_url_edit.setText("https://raw.githubusercontent.com/benberryhill/ScheduleApp-PyQt6/refs/heads/working_branch/schedule_app_pyqt6.py")
+        self.update_url_edit.setPlaceholderText("Enter raw GitHub file URL...")
+        url_layout.addWidget(QLabel("Update URL:"))
+        url_layout.addWidget(self.update_url_edit)
+
+        # Update Button
+        self.update_button = QPushButton("Check for Updates")
+        self.update_button.clicked.connect(self._check_for_updates)
+
+        update_layout.addLayout(url_layout)
+        update_layout.addWidget(self.update_button)
+        layout.addWidget(update_group)
+
         layout.addStretch()
         return widget
 
@@ -341,6 +363,65 @@ class SettingsWindow(QDialog):
         text_color = "white" if color.lightness() < 128 else "black"
         button.setStyleSheet(f"background-color: {color.name()}; color: {text_color};")
         button.setText(color.name())
+
+    def _check_for_updates(self):
+        """Downloads and validates a new script version from a URL."""
+        url = self.update_url_edit.text().strip()
+        if not url:
+            QMessageBox.warning(self, "No URL", "Please provide a valid URL for the update.")
+            return
+
+        # Get the path to the currently running script
+        current_script_path = os.path.abspath(sys.argv[0])
+
+        # Provide immediate feedback to the user
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Checking for Updates")
+        msg_box.setText("Downloading and checking for a new version...")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.NoButton)
+        msg_box.show()
+        QApplication.processEvents() # Ensure the message box is displayed
+
+        try:
+            # Download the new script content from the URL
+            with urllib.request.urlopen(url) as response:
+                if response.getcode() != 200:
+                    raise urllib.error.URLError(f"Server returned status code {response.getcode()}")
+                new_content = response.read()
+
+            # Read the content of the current script to compare
+            with open(current_script_path, 'rb') as f:
+                current_content = f.read()
+
+            msg_box.close() # Done checking, close the message box
+
+            if new_content == current_content:
+                QMessageBox.information(self, "Up to Date", "You are already using the latest version of the application.")
+            else:
+                reply = QMessageBox.question(self, "Update Found",
+                                             "A new version is available. The application must close to apply the update.\n\n"
+                                             "You will need to restart it manually. Continue?",
+                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                             QMessageBox.StandardButton.No)
+
+                if reply == QMessageBox.StandardButton.Yes:
+                    try:
+                        # Attempt to overwrite the old script file
+                        with open(current_script_path, 'wb') as f:
+                            f.write(new_content)
+
+                        QMessageBox.information(self, "Update Complete", "The application has been updated successfully. Please restart the application now.")
+                        self.main_window.close() # Close the main application window
+
+                    except IOError as e:
+                        QMessageBox.critical(self, "Update Error", f"Could not write to the application file. Please check permissions.\nError: {e}")
+
+        except (urllib.error.URLError, urllib.error.HTTPError) as e:
+            msg_box.close()
+            QMessageBox.critical(self, "Update Failed", f"Could not download the update. Please check your internet connection and the URL.\nError: {e}")
+        except Exception as e:
+            msg_box.close()
+            QMessageBox.critical(self, "An Error Occurred", f"An unexpected error occurred during the update process:\n{e}")
 
     def apply_changes(self):
         """Applies the settings to the main window without closing the dialog."""
