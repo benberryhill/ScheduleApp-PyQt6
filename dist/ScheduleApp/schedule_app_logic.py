@@ -405,6 +405,7 @@ class SettingsWindow(QDialog):
             with open(current_script_path, 'rb') as f:
                 current_content = f.read()
 
+            msg_box.hide()
             msg_box.close() # Done checking, close the message box
             if app_instance:
                 app_instance.processEvents()
@@ -413,8 +414,8 @@ class SettingsWindow(QDialog):
                 QMessageBox.information(self, "Up to Date", "You are already using the latest version of the application.")
             else:
                 reply = QMessageBox.question(self, "Update Found",
-                                             "A new version is available. The application must close to apply the update.\n\n"
-                                             "You will need to restart it manually. Continue?",
+                                             "A new version is available.\n\n"
+                                             "The application will restart automatically to apply changes. Continue?",
                                              QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                              QMessageBox.StandardButton.No)
 
