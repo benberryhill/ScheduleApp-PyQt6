@@ -277,7 +277,7 @@ class SettingsWindow(QDialog):
         url_layout = QHBoxLayout()
         self.update_url_edit = QLineEdit()
         # IMPORTANT: Replace this URL with the raw URL of your Python file on GitHub
-        self.update_url_edit.setText("https://raw.githubusercontent.com/benberryhill/ScheduleApp-PyQt6/refs/heads/working_branch/schedule_app_pyqt6.py")
+        self.update_url_edit.setText("https://raw.githubusercontent.com/benberryhill/ScheduleApp-PyQt6/refs/heads/working_branch/dist/ScheduleApp/schedule_app_logic.py")
         self.update_url_edit.setPlaceholderText("Enter raw GitHub file URL...")
         url_layout.addWidget(QLabel("Update URL:"))
         url_layout.addWidget(self.update_url_edit)
