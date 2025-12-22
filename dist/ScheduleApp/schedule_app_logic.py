@@ -4,6 +4,7 @@ import pandas as pd
 import re
 import json
 import urllib.request
+import subprocess
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox, QScrollArea, QFrame,
@@ -388,7 +389,10 @@ class SettingsWindow(QDialog):
         msg_box.setText("Downloading and checking for a new version...")
         msg_box.setStandardButtons(QMessageBox.StandardButton.NoButton)
         msg_box.show()
-        QApplication.processEvents() # Ensure the message box is displayed
+        # Force the UI to draw the message box immediately
+        app_instance = QApplication.instance()
+        if app_instance:
+            app_instance.processEvents()
 
         try:
             # Download the new script content from the URL
@@ -402,6 +406,8 @@ class SettingsWindow(QDialog):
                 current_content = f.read()
 
             msg_box.close() # Done checking, close the message box
+            if app_instance:
+                app_instance.processEvents()
 
             if new_content == current_content:
                 QMessageBox.information(self, "Up to Date", "You are already using the latest version of the application.")
@@ -418,8 +424,15 @@ class SettingsWindow(QDialog):
                         with open(current_script_path, 'wb') as f:
                             f.write(new_content)
 
-                        QMessageBox.information(self, "Update Complete", "The application has been updated successfully. Please restart the application now.")
-                        self.main_window.close() # Close the main application window
+                        QMessageBox.information(self, "Update Complete", "Update successful. Restarting...")
+                        # Launch a new instance of the executable
+                        if getattr(sys, 'frozen', False):
+                            subprocess.Popen([sys.executable])
+                        else:
+                            # If running from python script (dev mode)
+                            subprocess.Popen([sys.executable, sys.argv[0]])
+
+                        self.main_window.close() # Close this instance
 
                     except IOError as e:
                         QMessageBox.critical(self, "Update Error", f"Could not write to the application file. Please check permissions.\nError: {e}")
