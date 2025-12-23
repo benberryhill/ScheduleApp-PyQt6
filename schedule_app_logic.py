@@ -52,7 +52,6 @@ if not os.path.exists(EXCEL_FOLDER):
                 'Thu': ['Yes', 'Yes', 'Yes', 'Yes', 'Yes', 'Yes'],
                 'Fri': ['No', 'Yes', 'No', 'No', 'Yes', 'No'],
                 'Sat': ['Yes', 'No', 'Yes', 'Yes', 'No', 'Yes'],
-                'Notes': ['Team Lead', '', 'Part-time', 'New Hire', '', 'Floater'],
                 'Set Schedule': ['Yes', 'No', 'No', 'No', 'No', 'No'],
                 'Max Per Week': [4, 5, 3, 5, 5, 2],
                 'Time Off Dates': ['07/04/2024', '', '12/20/2024-12/28/2024', '01/01/2025', '', '']
@@ -71,10 +70,9 @@ except FileNotFoundError:
 
 # --- Data Classes (Unchanged from original) ---
 class Employee:
-    def __init__(self, name, availability, notes):
+    def __init__(self, name, availability):
         self.name = name
         self.availability = availability
-        self.notes = notes
     def __repr__(self):
         return f"Employee({self.name})"
 
@@ -499,23 +497,18 @@ class EmployeeEditorWindow(QDialog):
         self.edit_name = QLineEdit()
         grid.addWidget(self.edit_name, 0, 1)
 
-        # Row 1: Notes
-        grid.addWidget(QLabel("Notes:"), 1, 0)
-        self.edit_notes = QLineEdit()
-        grid.addWidget(self.edit_notes, 1, 1)
-
-        # Row 2: Availability
-        grid.addWidget(QLabel("Availability:"), 2, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        # Row 1: Availability
+        grid.addWidget(QLabel("Availability:"), 1, 0, alignment=Qt.AlignmentFlag.AlignTop)
         avail_layout = QHBoxLayout()
         self.availability_boxes = {}
         for day in DAYS:
             chk = QCheckBox(day)
             self.availability_boxes[day] = chk
             avail_layout.addWidget(chk)
-        grid.addLayout(avail_layout, 2, 1)
+        grid.addLayout(avail_layout, 1, 1)
 
-        # Row 3: Other settings
-        grid.addWidget(QLabel("Settings:"), 3, 0)
+        # Row 2: Other settings
+        grid.addWidget(QLabel("Settings:"), 2, 0)
         settings_layout = QHBoxLayout()
         self.set_schedule_check = QCheckBox("Set Schedule")
         self.set_schedule_check.setToolTip("If checked, this employee is automatically scheduled on all their available days.")
@@ -526,12 +519,12 @@ class EmployeeEditorWindow(QDialog):
         settings_layout.addWidget(QLabel("Max Days/Week:"))
         settings_layout.addWidget(self.max_days_edit)
         settings_layout.addStretch()
-        grid.addLayout(settings_layout, 3, 1)
+        grid.addLayout(settings_layout, 2, 1)
 
         main_layout.addWidget(editor_group)
         main_layout.addStretch()
 
-        # Row 4: Time Off
+        # Row 3: Time Off
         time_off_group = QGroupBox("Time Off Management")
         time_off_layout = QHBoxLayout(time_off_group)
 
@@ -619,7 +612,6 @@ class EmployeeEditorWindow(QDialog):
     def clear_fields(self):
         """Resets all input fields to their default state."""
         self.edit_name.clear()
-        self.edit_notes.clear()
         for chk in self.availability_boxes.values():
             chk.setChecked(False)
         self.set_schedule_check.setChecked(False)
@@ -642,10 +634,6 @@ class EmployeeEditorWindow(QDialog):
             df = pd.read_excel(master_employee_file_path)
             emp_data = df[df['Name'] == selected_name].iloc[0]
             self.edit_name.setText(emp_data['Name'])
-
-            notes_value = emp_data.get('Notes', '')
-            display_notes = str(notes_value) if pd.notna(notes_value) else ''
-            self.edit_notes.setText(display_notes)
 
             for day, chk in self.availability_boxes.items():
                 chk.setChecked(str(emp_data.get(day, 'No')).lower() == 'yes')
@@ -680,7 +668,7 @@ class EmployeeEditorWindow(QDialog):
         try:
             df = pd.read_excel(master_employee_file_path)
         except FileNotFoundError:
-            df = pd.DataFrame(columns=['Name'] + DAYS + ['Notes', 'Set Schedule', 'Max Per Week', 'Time Off Dates'])
+            df = pd.DataFrame(columns=['Name'] + DAYS + ['Set Schedule', 'Max Per Week', 'Time Off Dates'])
 
         original_name = self.employee_selector_combo.currentText()
         is_add_mode = self.add_new_mode_check.isChecked()
@@ -714,7 +702,6 @@ class EmployeeEditorWindow(QDialog):
 
         row_data = {
             'Name': name,
-            'Notes': self.edit_notes.text().strip(),
             'Set Schedule': 'Yes' if self.set_schedule_check.isChecked() else 'No',
             'Max Per Week': max_days,
             'Time Off Dates': new_time_off_string,
@@ -737,7 +724,7 @@ class EmployeeEditorWindow(QDialog):
 
         emp_obj = None
         if is_add_mode:
-            emp_obj = Employee(name, {d: row_data[d] == 'Yes' for d in DAYS}, row_data['Notes'])
+            emp_obj = Employee(name, {d: row_data[d] == 'Yes' for d in DAYS})
             main_app.employees.append(emp_obj)
             main_app.employees.sort(key=lambda e: e.name)
         else:
@@ -745,7 +732,6 @@ class EmployeeEditorWindow(QDialog):
 
         if emp_obj:
             emp_obj.name = name
-            emp_obj.notes = row_data['Notes']
             emp_obj.availability = {day: row_data[day] == 'Yes' for day in DAYS}
 
             # --- START OF CHANGE ---
@@ -948,7 +934,7 @@ class CollapsibleFrame(QFrame):
         self.toggle_button = QPushButton(f"▶ {title}")
         self.toggle_button.setStyleSheet("text-align: left; font-weight: bold; border: none; padding: 5px;")
         self.toggle_button.setCheckable(True)
-        self.toggle_button.setChecked(False) # Start collapsed
+        self.toggle_button.setChecked(True) # Start opened
 
         self.content_frame = QFrame()
         self.content_frame.setFrameShape(QFrame.Shape.NoFrame)
@@ -1669,7 +1655,7 @@ class SchedulerApp(QMainWindow):
 
             # Collapsible frame titles
             self.unassigned_frame.toggle_button.setFont(header_font)
-            self.no_set_days_frame.toggle_button.setFont(header_font)
+            self.all_employees_frame.toggle_button.setFont(header_font)
 
             # Final schedule day name labels (e.g., "Sun", "Mon")
             for day_widgets in self.final_schedule_day_headers.values():
@@ -1917,32 +1903,18 @@ class SchedulerApp(QMainWindow):
         self.unassigned_frame.setContentLayout(unassigned_content_layout)
         self._build_unassigned_grid()
 
-        # No Set Days (The new CollapsibleFrame)
-        self.no_set_days_frame = CollapsibleFrame("Employees With No Set Days")
-        no_set_days_content_layout = QVBoxLayout()
-        self.no_set_days_scroll_area = QScrollArea()
-        self.no_set_days_scroll_area.setWidgetResizable(True)
-        no_set_days_content_layout.addWidget(self.no_set_days_scroll_area)
-        self.no_set_days_frame.setContentLayout(no_set_days_content_layout)
-        self._build_no_set_days_grid()
-
         # All Employees (Unchanged)
-        all_employees_frame = QFrame()
-        all_employees_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        all_employees_layout = QVBoxLayout(all_employees_frame)
-        all_employees_title = QLabel("All Employees (Master List)")
-        self.grid_header_widgets.append(all_employees_title)
-        all_employees_layout.addWidget(all_employees_title)
+        self.all_employees_frame = CollapsibleFrame("All Employees (Master List)")
+        all_employees_content_layout = QVBoxLayout()
         self.all_employees_scroll_area = QScrollArea()
         self.all_employees_scroll_area.setWidgetResizable(True)
-        all_employees_layout.addWidget(self.all_employees_scroll_area)
+        all_employees_content_layout.addWidget(self.all_employees_scroll_area)
+        self.all_employees_frame.setContentLayout(all_employees_content_layout)
         self._build_all_employees_grid()
 
         # Add frames to the layout with stretch factors to share space
         layout.addWidget(self.unassigned_frame, 1)
-        layout.addWidget(self.no_set_days_frame, 1)
-        layout.addWidget(all_employees_frame, 1)
-
+        layout.addWidget(self.all_employees_frame, 1)
         return layout
 
     def _build_schedule_preview(self, parent_container):
@@ -2006,15 +1978,15 @@ class SchedulerApp(QMainWindow):
         container = QWidget()
         self.all_employees_scroll_area.setWidget(container)
         layout = QGridLayout(container)
-        
+
         # Headers
-        headers_text = ["<b>Name</b>", "<b>Availability</b>", "<b>Notes</b>", "<b>Time Off Dates</b>"]
+        headers_text = ["<b>Name</b>", "<b>Availability</b>", "<b>Time Off Dates</b>", "<b>Shifts This Week</b>"]
         for i, text in enumerate(headers_text):
             header_label = QLabel(text)
             layout.addWidget(header_label, 0, i)
             self.table_column_header_widgets.append(header_label)
         layout.setColumnStretch(0, 2)
-        layout.setColumnStretch(1, 3)
+        layout.setColumnStretch(1, 2)
         layout.setColumnStretch(2, 2)
         layout.setColumnStretch(3, 3)
 
@@ -2024,18 +1996,23 @@ class SchedulerApp(QMainWindow):
             name_lbl = ClickableLabel(self, "") # Still a ClickableLabel for drag-and-drop
             name_lbl.is_draggable = True
             avail_lbl = QLabel("")
-            notes_lbl = QLabel("")
             time_off_lbl = QLabel("")
-            
-            row_widgets = [name_lbl, avail_lbl, notes_lbl, time_off_lbl]
+            progress_bar = QProgressBar()
+
+            row_widgets = [name_lbl, avail_lbl, time_off_lbl, progress_bar]
+            alt_row_widgets = [name_lbl, avail_lbl, time_off_lbl]
             for i, widget in enumerate(row_widgets):
                 widget.setFixedHeight(22)
                 layout.addWidget(widget, row_idx, i)
-            
+
             self.all_employees_rows.append({
-                'name_lbl': name_lbl, 'avail_lbl': avail_lbl, 'notes_lbl': notes_lbl,
+                'name_lbl': name_lbl,
+                'avail_lbl': avail_lbl,
                 'time_off_lbl': time_off_lbl,
-                'conceptual_row_widgets': row_widgets, 'employee': None
+                'progress_bar': progress_bar,
+                'conceptual_row_widgets': row_widgets,
+                'alt_row_widgets': alt_row_widgets,
+                'employee': None
             })
         layout.setRowStretch(self.max_display_rows_per_list + 1, 1)
 
@@ -2060,39 +2037,6 @@ class SchedulerApp(QMainWindow):
 
         # Set an initial stretch
         self.unassigned_grid_layout.setRowStretch(INITIAL_ROWS_UNASSIGNED + 1, 1)
-
-    def _build_no_set_days_grid(self):
-        container = QWidget()
-        self.no_set_days_scroll_area.setWidget(container)
-        layout = QGridLayout(container)
-
-        header_name = QLabel("<b>Name</b>")
-        header_shifts = QLabel("<b>Shifts This Week</b>")
-        layout.addWidget(header_name, 0, 0)
-        layout.addWidget(header_shifts, 0, 1)
-        self.table_column_header_widgets.append(header_name)
-        self.table_column_header_widgets.append(header_shifts)
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 1)
-
-        self.no_set_days_rows = []
-        # Use a smaller number of pre-built rows as this list is usually shorter
-        for r in range(self.max_display_rows_per_list):
-            name_lbl = ClickableLabel(self, "")
-            name_lbl.is_draggable = True
-
-            progress_bar = QProgressBar()
-            progress_bar.setFixedHeight(20)
-
-            layout.addWidget(name_lbl, r + 1, 0)
-            layout.addWidget(progress_bar, r + 1, 1)
-
-            self.no_set_days_rows.append({
-                'name_lbl': name_lbl,
-                'progress_bar': progress_bar,
-                'employee': None
-            })
-        layout.setRowStretch(self.max_display_rows_per_list + 1, 1)
 
     def _open_employee_editor(self):
         """Opens the employee editor dialog."""
@@ -2197,8 +2141,7 @@ class SchedulerApp(QMainWindow):
                 loaded_names.add(name)
                 
                 availability = {day: str(row.get(day, '')).strip().lower() == 'yes' for day in DAYS}
-                notes = str(row.get('Notes', '')).strip()
-                emp = Employee(name, availability, notes)
+                emp = Employee(name, availability)
                 self.employees.append(emp)
 
                 # Check if the employee is a "set schedule" employee
@@ -2223,7 +2166,6 @@ class SchedulerApp(QMainWindow):
     def update_all_views(self):
         self.update_all_employees_grid()
         self.update_unassigned_grid()
-        self.update_no_set_days_grid()
         self.update_final_schedule_display()
 
     def get_alternating_row_style(self, index):
@@ -2240,26 +2182,50 @@ class SchedulerApp(QMainWindow):
             # Create a lookup map for the time off dates
             time_off_map = dict(zip(df_master['Name'], df_master.get('Time Off Dates', '')))
         except Exception as e:
-            print(f"Could not read master file for time off data: {e}")
+            print(f"Could not read master employee file for time off:\n{e}")
             time_off_map = {}
+
+        # Create a lookup map for the progress bar
+        df_master = pd.read_excel(master_employee_file_path)
+        max_per_week_map = dict(zip(df_master['Name'], df_master.get('Max Per Week', [7]*len(df_master))))
+
+        current_schedule_count = {emp.name: 0 for emp in self.employees}
+        for day in DAYS:
+            for emp in self.schedule.scheduled.get(day, []):
+                current_schedule_count[emp.name] += 1
+
+        theme_mode = 'dark' if self.is_dark_mode else 'light'
+        style_map = self.employee_progress_styles[theme_mode]
 
         for i, row_data in enumerate(self.all_employees_rows):
             if i < len(self.employees):
                 emp = self.employees[i]
+                current_count = current_schedule_count.get(emp.name, 0)
+                max_val = int(max_per_week_map.get(emp.name, 7))
+
                 row_data['employee'] = emp
                 row_data['name_lbl'].setText(emp.name)
                 row_data['name_lbl'].employee_obj = emp # Attach obj for drag/click
                 row_data['avail_lbl'].setText(', '.join([d for d, v in emp.availability.items() if v]))
-                row_data['notes_lbl'].setText(emp.notes)
-                
-                notes_display = emp.notes if emp.notes and emp.notes.lower() != 'nan' else ""
-                row_data['notes_lbl'].setText(notes_display)
 
                 raw_time_off_str = time_off_map.get(emp.name, '')
                 formatted_time_off = self._format_time_off_for_display(raw_time_off_str)
                 row_data['time_off_lbl'].setText(formatted_time_off)
-                
-                for lbl in row_data['conceptual_row_widgets']:
+
+                pb = row_data['progress_bar']
+                pb.setRange(0, max_val)
+                pb.setValue(current_count)
+                pb.setFormat(f"{current_count} / {max_val}")
+
+                status = "empty"
+                if current_count >= max_val: status = "at_max"
+                elif current_count == max_val - 1: status = "approaching_max"
+                elif 0 < current_count: status = "low"
+
+                pb.setStyleSheet(style_map.get(status, ""))
+                pb.show()
+
+                for lbl in row_data['alt_row_widgets']:
                     lbl.setStyleSheet(self.get_alternating_row_style(i))
                     lbl.show()
             else: # Hide unused rows
@@ -2359,67 +2325,6 @@ class SchedulerApp(QMainWindow):
                     lbl.setStyleSheet(self.get_alternating_row_style(r_idx))
 
                 lbl.show()
-
-    def update_no_set_days_grid(self):
-        """Populates the grid of employees who have no set available days."""
-        try:
-            df = pd.read_excel(master_employee_file_path)
-            max_per_week_map = dict(zip(df['Name'], df.get('Max Per Week', [7]*len(df))))
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Could not read master employee file:\n{e}")
-            return
-
-        current_schedule_count = {emp.name: 0 for emp in self.employees}
-        for day in DAYS:
-            for emp in self.schedule.scheduled.get(day, []):
-                current_schedule_count[emp.name] += 1
-
-        no_set_days_employees = []
-        for emp in self.employees:
-            if not any(emp.availability.values()):
-                if current_schedule_count.get(emp.name, 0) < max_per_week_map.get(emp.name, 7):
-                    no_set_days_employees.append(emp)
-
-        no_set_days_employees.sort(key=lambda e: e.name)
-
-        theme_mode = 'dark' if self.is_dark_mode else 'light'
-        style_map = self.employee_progress_styles[theme_mode]
-
-        for i, row_data in enumerate(self.no_set_days_rows):
-            if i < len(no_set_days_employees):
-                emp = no_set_days_employees[i]
-                current_count = current_schedule_count.get(emp.name, 0)
-                max_val = int(max_per_week_map.get(emp.name, 7))
-
-                row_data['employee'] = emp
-                row_data['name_lbl'].setText(emp.name)
-                row_data['name_lbl'].employee_obj = emp
-                row_data['name_lbl'].show()
-
-                pb = row_data['progress_bar']
-                pb.setRange(0, max_val)
-                pb.setValue(current_count)
-                pb.setFormat(f"{current_count} / {max_val}")
-
-                status = "empty"
-                if current_count >= max_val: status = "at_max"
-                elif current_count == max_val - 1: status = "approaching_max"
-                elif 0 < current_count: status = "low"
-
-                pb.setStyleSheet(style_map.get(status, ""))
-                pb.show()
-
-                # --- THIS IS THE FIX ---
-                # Add styling for the name label to handle both the global highlight
-                # and to reset the style after a drag operation.
-
-                row_data['name_lbl'].setStyleSheet(self.get_alternating_row_style(i))
-                # --- END OF FIX ---
-
-            else:
-                row_data['employee'] = None
-                row_data['name_lbl'].hide()
-                row_data['progress_bar'].hide()
 
     def update_final_schedule_display(self):
         current_max = self.max_per_day

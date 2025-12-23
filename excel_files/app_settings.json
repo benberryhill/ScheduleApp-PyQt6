@@ -25,7 +25,7 @@
     },
     "max_per_day": {
         "Sun": 35,
-        "Mon": 35,
+        "Mon": 0,
         "Tue": 35,
         "Wed": 35,
         "Thu": 35,
