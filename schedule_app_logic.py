@@ -2378,10 +2378,16 @@ class SchedulerApp(QMainWindow):
             status = "empty"
             if count > 0:
                 status = "warning"
-            if count >= max_val:
+            if max_val >= count > max_val - 5:
                 status = "semi_full"
             if count > max_val:
                 status = "full"
+
+            if count == 0 and max_val == 0:
+                progress_bar.setRange(0, 1)
+                progress_bar.setValue(1)
+                status = "empty"
+                progress_bar.setFormat("No glitch here...")
 
             # Apply the corresponding style to the progress bar
             style = self.progressbar_styles[theme_mode].get(status, "")
