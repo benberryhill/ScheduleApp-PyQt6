@@ -1288,11 +1288,11 @@ class SchedulerApp(QMainWindow):
         highlight_color_hex = self.theme_config['highlight_colors'][initial_theme_mode]
         highlight_color = QColor(highlight_color_hex)
         palette.setColor(QPalette.ColorRole.Highlight, highlight_color)
-        
+
         # Set the text color for the highlight based on the highlight color's brightness
         text_color = Qt.GlobalColor.white if highlight_color.lightness() < 128 else Qt.GlobalColor.black
         palette.setColor(QPalette.ColorRole.HighlightedText, text_color)
-        
+
         # Apply the new palette to the entire application
         self.setPalette(palette)
 
@@ -1311,7 +1311,7 @@ class SchedulerApp(QMainWindow):
         self._update_highlight_style() # Initialize the highlight style based on the current palette
         # Define styles for the schedule day headers
         self.header_base_style_template = "QLabel {{ font-weight: bold; padding: 4px; border-radius: 4px; color: {text_color}; background-color: {bg_color}; }}"
-        
+
         self.dark_header_styles = {
             "empty": self.header_base_style_template.format(bg_color="#3c3c3c", text_color="white"), # Darker gray for empty
             "warning": self.header_base_style_template.format(bg_color="darkred", text_color="white"), # Darker red for warning
@@ -2124,7 +2124,7 @@ class SchedulerApp(QMainWindow):
             print(f"Week changed. New start date: {self.current_week_start_date.toString('yyyy-MM-dd')}")
             self.reload_from_master_file() # Reload and refresh everything
 
-# --- Core Logic Methods ---
+    # --- Core Logic Methods ---
 
     def load_master_employees(self, df_master):
         self.employees.clear()
@@ -2139,7 +2139,7 @@ class SchedulerApp(QMainWindow):
                 name = str(row.get('Name', '')).strip()
                 if not name or name in loaded_names: continue
                 loaded_names.add(name)
-                
+
                 availability = {day: str(row.get(day, '')).strip().lower() == 'yes' for day in DAYS}
                 emp = Employee(name, availability)
                 self.employees.append(emp)
@@ -2159,7 +2159,7 @@ class SchedulerApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Load Error", f"Error processing master employee data:\n{e}")
             self.employees.clear()
-        
+
         self.update_all_views()
         if not self.employees: self.clear_editor_fields()
 
@@ -2231,7 +2231,11 @@ class SchedulerApp(QMainWindow):
             else: # Hide unused rows
                 row_data['employee'] = None
                 for lbl in row_data['conceptual_row_widgets']:
-                    lbl.setText("")
+                    # Check if the widget is a ProgressBar (which doesn't have setText)
+                    if isinstance(lbl, QProgressBar):
+                        lbl.setValue(0)
+                    else:
+                        lbl.setText("")
                     lbl.hide()
 
     def update_unassigned_grid(self):
@@ -2572,15 +2576,15 @@ class SchedulerApp(QMainWindow):
         if not any(self.schedule.scheduled.values()):
             QMessageBox.information(self, "Export", "Schedule is empty.")
             return
-        
+
         try:
             filename = f"Generated_Schedule_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             path = os.path.join(EXCEL_FOLDER, filename)
-            
+
             max_len = max(len(v) for v in self.schedule.scheduled.values())
-            data = {day: [e.name for e in emps] + [''] * (max_len - len(emps)) 
+            data = {day: [e.name for e in emps] + [''] * (max_len - len(emps))
                     for day, emps in self.schedule.scheduled.items()}
-            
+
             df = pd.DataFrame(data)
             df.to_excel(path, index=False)
             QMessageBox.information(self, "Export Successful", f"Schedule saved to:\n{path}")
@@ -2642,48 +2646,81 @@ class SchedulerApp(QMainWindow):
     def save_draft(self):
         """Saves the current schedule to a JSON file."""
         try:
-            # Convert objects to a dictionary of lists of names
-            # Structure: {'Mon': ['Alice', 'Bob'], 'Tue': ['Charlie']}
-            draft_data = {
+            # 1. Prepare the schedule data
+            schedule_data = {
                 day: [e.name for e in self.schedule.scheduled[day]]
                 for day in DAYS
             }
 
+            # 2. Create the wrapper object containing the date and the schedule
+            draft_content = {
+                "week_start_date": self.current_week_start_date.toString("yyyy-MM-dd"),
+                "schedule_data": schedule_data
+            }
+
             draft_path = os.path.join(EXCEL_FOLDER, DRAFT_FILE)
             with open(draft_path, 'w') as f:
-                json.dump(draft_data, f, indent=4)
-            print(f"Draft saved to {draft_path}")
+                json.dump(draft_content, f, indent=4)
+            print(f"Draft saved to {draft_path} for week of {draft_content['week_start_date']}")
+
         except Exception as e:
             print(f"Error saving draft: {e}")
 
     def check_and_load_draft(self):
-        """Checks if a draft exists and asks user to load it."""
+        """Checks if a draft exists, switches to the saved week, and loads the schedule."""
         draft_path = os.path.join(EXCEL_FOLDER, DRAFT_FILE)
 
         if not os.path.exists(draft_path):
             return
 
+        # Preview the file to see what week it is for
+        try:
+            with open(draft_path, 'r') as f:
+                raw_data = json.load(f)
+
+            # Check if this is the new format or legacy format
+            if "week_start_date" in raw_data:
+                saved_date_str = raw_data["week_start_date"]
+                schedule_map = raw_data["schedule_data"]
+                msg_extra = f"\n\nThis draft is for the week of: {saved_date_str}"
+            else:
+                # Legacy format (just the schedule dict)
+                schedule_map = raw_data
+                saved_date_str = None
+                msg_extra = "\n\n(Note: This is an older draft file without date information.)"
+
+        except Exception as e:
+            print(f"Error reading draft for preview: {e}")
+            return
+
         reply = QMessageBox.question(
             self,
             "Load Draft?",
-            "A saved draft from a previous session was found.\n\nDo you want to load it?",
+            f"A saved draft from a previous session was found.{msg_extra}\n\nDo you want to load it?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes
         )
 
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                with open(draft_path, 'r') as f:
-                    draft_data = json.load(f)
+                # 1. Switch the week if a date was saved
+                if saved_date_str:
+                    saved_date = QDate.fromString(saved_date_str, "yyyy-MM-dd")
+                    if saved_date.isValid():
+                        # This method updates the internal date, updates the button text,
+                        # and calls reload_from_master_file() which refreshes time-off data.
+                        self._on_week_changed(saved_date)
 
+                # 2. Prepare for population
                 # Create a lookup map: Name -> Employee Object
-                # This ensures we are using the live employee objects with current availability info
+                # This ensures we are using the live employee objects
                 employee_map = {e.name: e for e in self.employees}
 
+                # Clear whatever _on_week_changed might have auto-scheduled
                 self.schedule.clear_schedule()
 
-                # Reconstruct schedule
-                for day, names in draft_data.items():
+                # 3. Reconstruct schedule from the map
+                for day, names in schedule_map.items():
                     if day in DAYS:
                         for name in names:
                             if name in employee_map:
@@ -2695,7 +2732,7 @@ class SchedulerApp(QMainWindow):
             except Exception as e:
                 QMessageBox.warning(self, "Load Error", f"Could not load draft file:\n{e}")
 
-# --- Drag/Drop and Click Handling ---
+    # --- Drag/Drop and Click Handling ---
     def on_drag_start(self, label_widget):
         if label_widget and label_widget.employee_obj:
             self.drag_data = {'label_widget': label_widget, 'employee': label_widget.employee_obj}
