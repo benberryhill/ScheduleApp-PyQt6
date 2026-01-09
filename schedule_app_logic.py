@@ -2231,7 +2231,11 @@ class SchedulerApp(QMainWindow):
             else: # Hide unused rows
                 row_data['employee'] = None
                 for lbl in row_data['conceptual_row_widgets']:
-                    lbl.setText("")
+                    # Check if the widget is a ProgressBar (which doesn't have setText)
+                    if isinstance(lbl, QProgressBar):
+                        lbl.setValue(0)
+                    else:
+                        lbl.setText("")
                     lbl.hide()
 
     def update_unassigned_grid(self):
@@ -2642,48 +2646,81 @@ class SchedulerApp(QMainWindow):
     def save_draft(self):
         """Saves the current schedule to a JSON file."""
         try:
-            # Convert objects to a dictionary of lists of names
-            # Structure: {'Mon': ['Alice', 'Bob'], 'Tue': ['Charlie']}
-            draft_data = {
+            # 1. Prepare the schedule data
+            schedule_data = {
                 day: [e.name for e in self.schedule.scheduled[day]]
                 for day in DAYS
             }
 
+            # 2. Create the wrapper object containing the date and the schedule
+            draft_content = {
+                "week_start_date": self.current_week_start_date.toString("yyyy-MM-dd"),
+                "schedule_data": schedule_data
+            }
+
             draft_path = os.path.join(EXCEL_FOLDER, DRAFT_FILE)
             with open(draft_path, 'w') as f:
-                json.dump(draft_data, f, indent=4)
-            print(f"Draft saved to {draft_path}")
+                json.dump(draft_content, f, indent=4)
+            print(f"Draft saved to {draft_path} for week of {draft_content['week_start_date']}")
+
         except Exception as e:
             print(f"Error saving draft: {e}")
 
     def check_and_load_draft(self):
-        """Checks if a draft exists and asks user to load it."""
+        """Checks if a draft exists, switches to the saved week, and loads the schedule."""
         draft_path = os.path.join(EXCEL_FOLDER, DRAFT_FILE)
 
         if not os.path.exists(draft_path):
             return
 
+        # Preview the file to see what week it is for
+        try:
+            with open(draft_path, 'r') as f:
+                raw_data = json.load(f)
+
+            # Check if this is the new format or legacy format
+            if "week_start_date" in raw_data:
+                saved_date_str = raw_data["week_start_date"]
+                schedule_map = raw_data["schedule_data"]
+                msg_extra = f"\n\nThis draft is for the week of: {saved_date_str}"
+            else:
+                # Legacy format (just the schedule dict)
+                schedule_map = raw_data
+                saved_date_str = None
+                msg_extra = "\n\n(Note: This is an older draft file without date information.)"
+
+        except Exception as e:
+            print(f"Error reading draft for preview: {e}")
+            return
+
         reply = QMessageBox.question(
             self,
             "Load Draft?",
-            "A saved draft from a previous session was found.\n\nDo you want to load it?",
+            f"A saved draft from a previous session was found.{msg_extra}\n\nDo you want to load it?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes
         )
 
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                with open(draft_path, 'r') as f:
-                    draft_data = json.load(f)
+                # 1. Switch the week if a date was saved
+                if saved_date_str:
+                    saved_date = QDate.fromString(saved_date_str, "yyyy-MM-dd")
+                    if saved_date.isValid():
+                        # This method updates the internal date, updates the button text,
+                        # and calls reload_from_master_file() which refreshes time-off data.
+                        self._on_week_changed(saved_date)
 
+                # 2. Prepare for population
                 # Create a lookup map: Name -> Employee Object
-                # This ensures we are using the live employee objects with current availability info
+                # This ensures we are using the live employee objects
                 employee_map = {e.name: e for e in self.employees}
 
+                # Clear whatever _on_week_changed might have auto-scheduled
                 self.schedule.clear_schedule()
 
-                # Reconstruct schedule
-                for day, names in draft_data.items():
+                # 3. Reconstruct schedule from the map
+                for day, names in schedule_map.items():
                     if day in DAYS:
                         for name in names:
                             if name in employee_map:
